@@ -1,0 +1,20 @@
+# Prerequisites
+node --version  # Need v18+
+npm --version
+
+# Clone the repo
+git clone https://github.com/your-org/ecosim.git
+cd ecosim
+
+# Scaffold with Vite (Member 4 does this first, others pull)
+npm create vite@latest . -- --template react-ts
+npm install
+
+# Core dependencies
+npm install three @types/three
+npm install @tensorflow/tfjs
+npm install recharts firebase
+npm install -D tailwindcss
+
+# Verify it runs
+npm run dev
