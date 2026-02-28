@@ -28,7 +28,8 @@ export class SceneManager {
 
     createLights(this.scene);
 
-    this.scene.add(new THREE.GridHelper(200, 50));
+    this.scene.add(new THREE.GridHelper(200, 50)); //Grid Helper
+    this.scene.add(new THREE.AxesHelper(10)); //Axes Helper
 
     const cube = new THREE.Mesh(
       new THREE.BoxGeometry(5, 5, 5),
