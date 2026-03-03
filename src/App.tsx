@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { SceneManager } from "./scene/SceneManager";
 
+
 function App() {
   const mountRef = useRef<HTMLDivElement | null>(null);
 
