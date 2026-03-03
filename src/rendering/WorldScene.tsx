@@ -1,8 +1,8 @@
 // Three.js scene, renderer, OrbitControls
-
 // green box to check if works
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
+import { createAgents } from './agents'
 
 export function WorldScene() {
   const ref = useRef<HTMLDivElement>(null)
@@ -22,6 +22,8 @@ export function WorldScene() {
       new THREE.BoxGeometry(10, 10, 10),
       new THREE.MeshLambertMaterial({ color: 0x00ff88 })
     ))
+
+    createAgents(scene)
 
     const loop = () => { requestAnimationFrame(loop); renderer.render(scene, camera) }
     loop()
