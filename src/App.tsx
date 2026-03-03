@@ -1,9 +1,8 @@
-// switch back to {W WorldScene } from './rendering/WorldScene' after merging with alex's stuff
-import { SimulationTest } from './SimulationTest'
+import { WorldScene } from './rendering/WorldScene'
 
 
 function App() {
-  return <SimulationTest /> //switch back to WorldScene, call world scene function from /rendering/WorldScene
+  return <WorldScene />
 }
 
 export default App
