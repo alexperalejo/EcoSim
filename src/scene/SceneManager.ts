@@ -5,6 +5,7 @@ import { createRenderer } from "./createRenderer";
 import { createCamera } from "./createCamera";
 import { createControls } from "./createControls";
 import { createLights } from "./createLights";
+import { createAgents, updateAgents, disposeAgents } from "../simulation";
 
 export class SceneManager {
   private mountEl: HTMLDivElement;
@@ -12,7 +13,7 @@ export class SceneManager {
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
-  //private clock: THREE.Clock;
+  private clock: THREE.Clock;
   private _raf: number | null = null;
   private _onResize: () => void;
 
@@ -37,8 +38,9 @@ export class SceneManager {
     );
     cube.position.y = 2.5;
     this.scene.add(cube);
+    this.scene.add(createAgents());
 
-    //this.clock = new THREE.Clock();
+    this.clock = new THREE.Clock();
 
     this._onResize = () => this.resize();
     window.addEventListener("resize", this._onResize);
@@ -50,10 +52,12 @@ export class SceneManager {
     if (this._raf) return;
 
     const tick = () => {
-      this.controls.update();
-      this.renderer.render(this.scene, this.camera);
-      this._raf = requestAnimationFrame(tick);
-    };
+  const dt = this.clock.getDelta();
+  updateAgents(dt);
+  this.controls.update();
+  this.renderer.render(this.scene, this.camera);
+  this._raf = requestAnimationFrame(tick);
+};
 
     tick();
   }
@@ -70,6 +74,7 @@ export class SceneManager {
   }
 
   dispose() {
+    disposeAgents();
     if (this._raf) cancelAnimationFrame(this._raf);
 
     window.removeEventListener("resize", this._onResize);
