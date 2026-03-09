@@ -50,6 +50,74 @@ import _foodFrag from './shaders/food.frag.glsl?raw';
 const quadVert = _quadVert.trim();
 const movementFrag = _movementFrag.trim();
 const foodFrag = _foodFrag.trim();
+import { sampleTerrainHeight } from '../rendering/terrain'
+
+// ── Slot Manager ─────────────────────────────────────────────────────
+//
+// The GPU texture has MAX_AGENTS (4096) fixed slots.
+// When an agent dies, its slot must be marked free so reproduction
+// (Sprint 2) can reuse it. Without this, the simulation runs out of
+// slots and silently empties after enough deaths.
+//
+// This is a CPU-side free list. It stays in sync with the GPU state
+// by scanning the alive channel during each readback.
+
+const MAX_AGENTS = TEX_SIZE * TEX_SIZE // 4096
+
+class SlotManager {
+  private freeSlots: Set<number>
+  private occupiedSlots: Set<number>
+
+  constructor(initialCount: number) {
+    this.freeSlots = new Set()
+    this.occupiedSlots = new Set()
+
+    // First `initialCount` slots start occupied
+    for (let i = 0; i < MAX_AGENTS; i++) {
+      if (i < initialCount) {
+        this.occupiedSlots.add(i)
+      } else {
+        this.freeSlots.add(i)
+      }
+    }
+  }
+
+  /** Mark a slot as free (called when agent dies) */
+  free(slot: number): void {
+    this.occupiedSlots.delete(slot)
+    this.freeSlots.add(slot)
+  }
+
+  /** Claim the next free slot for a new agent. Returns -1 if full. */
+  allocate(): number {
+    const iter = this.freeSlots.values().next()
+    if (iter.done) return -1
+    const slot = iter.value
+    this.freeSlots.delete(slot)
+    this.occupiedSlots.add(slot)
+    return slot
+  }
+
+  get freeCount(): number { return this.freeSlots.size }
+  get aliveCount(): number { return this.occupiedSlots.size }
+
+  /**
+   * Sync slot state against a full GPU readback of stateB.
+   * Called every N frames so the free list stays accurate.
+   * Any slot where alive < 0.5 is marked free.
+   */
+  syncFromGPU(stateBData: Float32Array): void {
+    for (let i = 0; i < MAX_AGENTS; i++) {
+      const alive = stateBData[i * 4 + 3]
+      if (alive < 0.5) {
+        if (this.occupiedSlots.has(i)) {
+          this.free(i)
+        }
+      }
+    }
+  }
+}
+
 // ── Types ────────────────────────────────────────────────────────────
 
 export interface SimulationEngine {
@@ -58,8 +126,10 @@ export interface SimulationEngine {
   /** Returns a THREE.Object3D to add to the scene */
   getSceneObject: () => THREE.Object3D;
   /** Read population stats back from GPU (call sparingly) */
-  getStats: () => { alive: number; avgEnergy: number; avgAge: number };
+  getStats: () => { alive: number; free: number;avgEnergy: number; avgAge: number };
   /** Clean up all GPU resources */
+  getNextFreeSlot: () => number;
+  /** Returns the next free slot index for reproduction. -1 if full. */
   dispose: () => void;
   /** Exposed for UI controls in Sprint 3 */
   params: SimParams;
@@ -90,26 +160,21 @@ export function createSimulationEngine(): SimulationEngine {
   const movementProgram = createProgram(gl, quadVert, movementFrag);
   const foodProgram = createProgram(gl, quadVert, foodFrag);
 
-  // ── 4. Create a VAO for fullscreen triangle (no attributes) ───
+  // ── 4. VAO + MRT framebuffer ──────────────────────────────────
   const vao = gl.createVertexArray();
-
-  // ── 5. Set up MRT (Multiple Render Targets) framebuffer ───────
-  // For the movement pass, we write to BOTH stateA and stateB
-  // simultaneously using gl.drawBuffers.
   const mrtFramebuffer = gl.createFramebuffer();
 
-  // Mutable params (UI can modify in Sprint 3)
-  const params = { ...DEFAULT_PARAMS };
+  // ── 5. Slot manager ───────────────────────────────────────────
+  const slotManager = new SlotManager(INITIAL_AGENT_COUNT)
 
-  // Track time for shader randomness
-  let elapsedTime = 0;
+  const params = { ...DEFAULT_PARAMS }
+  let elapsedTime = 0
 
   // ── 6. Create Three.js InstancedMesh for visualization ────────
   // Each alive agent = one instance of a small sphere
   const agentGeometry = new THREE.SphereGeometry(0.5, 8, 6);
   const agentMaterial = new THREE.MeshLambertMaterial({ color: 0x44dd88 });
-  const maxAgents = TEX_SIZE * TEX_SIZE;
-  const instancedMesh = new THREE.InstancedMesh(agentGeometry, agentMaterial, maxAgents);
+  const instancedMesh = new THREE.InstancedMesh(agentGeometry, agentMaterial, MAX_AGENTS)
   instancedMesh.count = INITIAL_AGENT_COUNT;
   instancedMesh.frustumCulled = false; // Important: agents are GPU-managed
 
@@ -133,15 +198,14 @@ export function createSimulationEngine(): SimulationEngine {
     // Set up MRT: attach WRITE textures for both state buffers
     gl.bindFramebuffer(gl.FRAMEBUFFER, mrtFramebuffer);
     gl.framebufferTexture2D(
-      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D,
-      getWriteTexture(stateBufferA), 0
-    );
+    gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D,
+    getWriteTexture(stateBufferA), 0
+  );
     gl.framebufferTexture2D(
-      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D,
-      getWriteTexture(stateBufferB), 0
-    );
+    gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D,
+    getWriteTexture(stateBufferB), 0
+  );
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
-
     gl.viewport(0, 0, TEX_SIZE, TEX_SIZE);
 
     // Bind READ textures
@@ -190,36 +254,54 @@ export function createSimulationEngine(): SimulationEngine {
   }
 
   // ── Sync GPU → Three.js ───────────────────────────────────────
-
+  let syncFrame = 0
   function syncToThreeJS(): void {
     // Read back positions from GPU
     const posData = readBackData(gl, stateBufferA);
     const metaData = readBackData(gl, stateBufferB);
 
-    let aliveCount = 0;
+    // Every 10 syncs, do a full slot reconciliation
+    // This catches any deaths the frame-by-frame check missed
+    syncFrame++
+    if (syncFrame % 10 === 0) {
+      slotManager.syncFromGPU(metaData);
+    }
 
-    for (let i = 0; i < maxAgents; i++) {
-      const aIdx = i * 4;
-      const alive = metaData[aIdx + 3];
+    let renderCount = 0
+
+    for (let i = 0; i < MAX_AGENTS; i++) {
+      const mIdx = i * 4;
+      const alive = metaData[mIdx + 3];
 
       if (alive > 0.5) {
-        const px = posData[aIdx + 0];
-        const py = posData[aIdx + 1];
+        const px = posData[i * 4 + 0]
+        const py = posData[i * 4 + 1]
 
         // Map 2D simulation coords to 3D world space
         // Center the world around origin, Y is up in Three.js
+        
+
+        // then inside syncToThreeJS:
+        const worldX = px - params.worldSize / 2
+        const worldZ = py - params.worldSize / 2
+        const groundY = sampleTerrainHeight(worldX, worldZ)
+
         dummy.position.set(
-          px - params.worldSize / 2,  // X
-          1.0,                         // Y (slightly above terrain)
-          py - params.worldSize / 2   // Z
-        );
+          worldX,
+          groundY + 1.0,   // 1 unit above the actual terrain surface
+          worldZ
+        )
         dummy.updateMatrix();
-        instancedMesh.setMatrixAt(aliveCount, dummy.matrix);
-        aliveCount++;
+        instancedMesh.setMatrixAt(renderCount, dummy.matrix);
+        renderCount++;
+      }
+      else {
+        // Agent just died — free the slot for reuse
+        slotManager.free(i)
       }
     }
 
-    instancedMesh.count = aliveCount;
+    instancedMesh.count = renderCount;
     instancedMesh.instanceMatrix.needsUpdate = true;
   }
 
@@ -251,7 +333,7 @@ export function createSimulationEngine(): SimulationEngine {
       let totalEnergy = 0;
       let totalAge = 0;
 
-      for (let i = 0; i < maxAgents; i++) {
+      for (let i = 0; i < MAX_AGENTS; i++) {
         const idx = i * 4;
         if (metaData[idx + 3] > 0.5) {
           alive++;
@@ -262,9 +344,15 @@ export function createSimulationEngine(): SimulationEngine {
 
       return {
         alive,
+        free: slotManager.freeCount,
         avgEnergy: alive > 0 ? totalEnergy / alive : 0,
         avgAge: alive > 0 ? totalAge / alive : 0,
       };
+    },
+
+      // Used by Sprint 2 reproduction to claim a slot for a new agent
+    getNextFreeSlot() {
+      return slotManager.allocate()
     },
 
     dispose() {
@@ -309,7 +397,7 @@ export function updateAgents(dt: number): void {
  * Returns current simulation stats for UI/analytics.
  */
 export function getAgentStats() {
-  return engine?.getStats() ?? { alive: 0, avgEnergy: 0, avgAge: 0 };
+  return engine?.getStats() ?? { alive: 0, free: 0, avgEnergy: 0, avgAge: 0 };
 }
 
 /**
