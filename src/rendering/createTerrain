@@ -1,0 +1,35 @@
+// src/rendering/createTerrain.ts
+import * as THREE from 'three'
+import { createNoise2D } from 'simplex-noise'
+import alea from 'alea'
+
+export function createTerrain(): THREE.Mesh {
+  const noise2D = createNoise2D(alea('ecosim-seed'))
+  const geo = new THREE.PlaneGeometry(200, 200, 128, 128)
+  geo.rotateX(-Math.PI / 2)
+
+  const pos = geo.attributes.position
+  const colors: number[] = []
+  const color = new THREE.Color()
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i)
+    const height =
+      noise2D(x * 0.02, z * 0.02) * 20 +
+      noise2D(x * 0.06, z * 0.06) * 8 +
+      noise2D(x * 0.15, z * 0.15) * 3
+    pos.setY(i, height)
+
+    if (height < -2) color.set(0xc2a050)
+    else if (height < 8) color.set(0x4a7c3f)
+    else if (height < 15) color.set(0x6b7c5a)
+    else color.set(0xeaeaea)
+    colors.push(color.r, color.g, color.b)
+  }
+
+  pos.needsUpdate = true
+  geo.computeVertexNormals()
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+
+  return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }))
+}

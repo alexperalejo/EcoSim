@@ -31,6 +31,13 @@ uniform float uWorldSize;       // world bounds
 uniform float uFoodDetectRadius;// food sensing range
 uniform float uTime;            // global time for noise/variation
 
+// ── Reproduction parameters (ES-16 / ES-91) ───────────────────────
+// The shader drains reproduction energy cost so the GPU handles the
+// parent's energy deduction. The CPU handles offspring spawning via
+// texSubImage2D after detecting agents above the threshold.
+uniform float uReproThreshold;  // energy required to reproduce (e.g. 80.0)
+uniform float uReproEnergyCost; // energy drained per tick while above threshold
+
 // ── Outputs (MRT) ─────────────────────────────────────────────────
 layout(location = 0) out vec4 outStateA;
 layout(location = 1) out vec4 outStateB;
@@ -102,6 +109,16 @@ void main() {
 
   // ── Energy update ───────────────────────────────────────────
   energy = energy - (uMoveEnergyCost * uDeltaTime) + energyGain;
+
+  // ── Reproduction energy drain (ES-16 / ES-91: T-2.4.1) ─────
+  // When above the reproduction threshold the agent pays a per-tick
+  // metabolic cost. This models the expense of being ready to reproduce
+  // and prevents agents sitting at max energy forever.
+  // Actual offspring spawning happens CPU-side via texSubImage2D.
+  if (energy > uReproThreshold) {
+    energy -= uReproEnergyCost * uDeltaTime;
+  }
+
   energy = clamp(energy, 0.0, uMaxEnergy);
 
   // ── Death check ─────────────────────────────────────────────
