@@ -24,6 +24,14 @@ uniform float uPredatorEnergyGain;
 uniform int   uNNPixelsPerAgent;
 uniform float uNNTexHeight;
 
+// ── Reproduction parameters (ES-16 / ES-91) ───────────────────────
+// The shader drains reproduction energy cost so the GPU handles the
+// parent's energy deduction. The CPU handles offspring spawning via
+// texSubImage2D after detecting agents above the threshold.
+uniform float uReproThreshold;  // energy required to reproduce (e.g. 80.0)
+uniform float uReproEnergyCost; // energy drained per tick while above threshold
+
+// ── Outputs (MRT) ─────────────────────────────────────────────────
 layout(location = 0) out vec4 outStateA;
 layout(location = 1) out vec4 outStateB;
 
