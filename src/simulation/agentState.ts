@@ -27,13 +27,37 @@ export const INITIAL_AGENT_COUNT = 512;
 
 // ── Simulation Defaults ──────────────────────────────────────────────
 export const DEFAULT_PARAMS = {
+  // ── Core survival ──────────────────────────────────────────────
   maxEnergy: 100.0,
   maxAge: 500.0,
-  moveEnergyCost: 0.1,     // energy drained per tick of movement
-  foodEnergyGain: 20.0,    // energy gained when eating food
-  moveSpeed: 1.5,          // base movement speed
-  foodDetectRadius: 10.0,  // how far agents can sense food
+  moveEnergyCost: 0.1,
+  foodEnergyGain: 20.0,
+  moveSpeed: 1.5,
+  foodDetectRadius: 10.0,
   worldSize: WORLD_SIZE,
+
+  // ── ES-26: Neuroevolution config ───────────────────────────────
+  // Mutation rate: probability that any single weight is perturbed
+  // during reproduction. 0.0 = no evolution, 1.0 = full randomness.
+  // Typical useful range: 0.01 – 0.3
+  mutationRate: 0.05,
+
+  // Mutation strength: how large each weight perturbation can be.
+  // New weight = old weight + random(-mutationStrength, +mutationStrength)
+  mutationStrength: 0.2,
+
+  // Neural network hidden layer size.
+  // Agents have a fixed 2-layer NN: inputs → hidden → outputs.
+  // Changing this requires recompiling the NN shader (Sprint 2).
+  // Sensible values: 4, 8, 16 (larger = smarter but slower on GPU)
+  nnHiddenSize: 8,
+
+  // Reproduction energy threshold: agent must have this much energy
+  // to be eligible to reproduce (ES-16).
+  reproductionEnergyThreshold: 70.0,
+
+  // Energy cost of reproduction — split between parent and offspring
+  reproductionEnergyCost: 30.0,
 } as const;
 
 export type SimParams = typeof DEFAULT_PARAMS;
