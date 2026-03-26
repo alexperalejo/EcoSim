@@ -12,10 +12,12 @@
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
     "@types/three": "^0.183.1",
+    "alea": "^1.0.1",
     "firebase": "^12.9.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "recharts": "^3.7.0",
+    "simplex-noise": "^4.0.3",
     "three": "^0.183.1"
   },
   "devDependencies": {
