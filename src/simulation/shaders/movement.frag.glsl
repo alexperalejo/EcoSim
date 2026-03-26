@@ -1,6 +1,19 @@
 #version 300 es
 precision highp float;
 
+// ES-52 / ES-19: Agent Movement, Spatial Awareness & State Update
+//
+// ES-19 adds food-seeking behaviour on top of the random walk from ES-52.
+// Each agent samples the food grid in 8 directions within uFoodDetectRadius
+// and steers toward the richest food source. When energy is low the agent
+// weights food-seeking more heavily (desperation bias).
+//
+// TWO OUTPUTS (MRT - Multiple Render Targets):
+//   layout(location = 0) → State A (position.xy, velocity.xy)
+//   layout(location = 1) → State B (energy, age, species, alive)
+
+
+// ── Inputs ────────────────────────────────────────────────────────
 in vec2 vUv;
 
 uniform sampler2D uStateA;
