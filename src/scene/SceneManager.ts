@@ -17,6 +17,8 @@ import { createControls } from './createControls'
 import { createLights } from './createLights'
 import { createTerrain } from '../rendering/terrain'
 import { createAgents, updateAgents, disposeAgents } from '../simulation'
+import { updateDayNight } from './dayNight'
+import type { SceneLights } from './createLights'
 
 export class SceneManager {
   private mountEl: HTMLDivElement
@@ -27,6 +29,7 @@ export class SceneManager {
   private clock: THREE.Clock
   private _raf: number | null = null
   private _onResize: () => void
+  private lights: SceneLights
 
   constructor(mountEl: HTMLDivElement) {
     this.mountEl = mountEl
@@ -45,8 +48,7 @@ export class SceneManager {
     this.controls = createControls(this.camera, this.renderer.domElement)
 
     // Lighting (returns handles for Sprint 2 day/night animation)
-    createLights(this.scene)
-
+    this.lights = createLights(this.scene)
     // ── Terrain ──────────────────────────────────────────────────
     // Size 256 matches WORLD_SIZE in agentState.ts
     const terrain = createTerrain({ size: 256, segments: 128, maxHeight: 30 })
@@ -72,6 +74,7 @@ export class SceneManager {
     const tick = () => {
       const dt = this.clock.getDelta()
       updateAgents(dt)
+      updateDayNight(this.clock.elapsedTime, this.lights.sun, this.lights.ambient, this.scene)
       this.controls.update()
       this.renderer.render(this.scene, this.camera)
       this._raf = requestAnimationFrame(tick)
