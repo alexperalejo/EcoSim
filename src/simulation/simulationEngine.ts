@@ -60,31 +60,6 @@ const KILL_RADIUS          = 0.8   // world-space units; predator eats prey with
 const PREDATOR_ENERGY_GAIN = 35.0  // energy units gained from one kill (out of uMaxEnergy)
 
 // ── Slot Manager ─────────────────────────────────────────────────────
-//
-// The GPU texture has MAX_AGENTS (4096) fixed slots.
-// When an agent dies, its slot must be marked free so reproduction
-// (Sprint 2) can reuse it. Without this, the simulation runs out of
-// slots and silently empties after enough deaths.
-//
-// This is a CPU-side free list. It stays in sync with the GPU state
-// by scanning the alive channel during each readback.
-
-const MAX_AGENTS = TEX_SIZE * TEX_SIZE // 4096
-
-// ── Reproduction Constants (ES-16 / ES-91) ───────────────────────────
-//
-// T-2.4.1: Reproduction threshold — energy must exceed this to spawn.
-// T-2.4.2: Parent and child each receive half of parent's energy.
-// T-2.4.3: getNextFreeSlot() / slotManager.allocate() provides the slot.
-//
-// Cooldown prevents one agent from spawning every frame at high energy.
-// MAX_SPAWNS_PER_FRAME caps burst events (e.g. first tick after food surge).
-const REPRO_THRESHOLD      = 80.0   // energy required to trigger reproduction
-const REPRO_ENERGY_COST    = 5.0    // extra shader drain per tick while above threshold
-const REPRO_MIN_AGE        = 30.0   // agent must be at least this old to reproduce
-const REPRO_COOLDOWN_FRAMES = 90    // frames between reproduction events per agent
-const MAX_SPAWNS_PER_FRAME  = 8     // hard cap to avoid burst performance spikes
-
 class SlotManager {
   private freeSlots: Set<number>
   private occupiedSlots: Set<number>
@@ -169,8 +144,8 @@ export function createSimulationEngine(): SimulationEngine {
   // Agent can only reproduce when its counter reaches 0.
   const reproCooldown = new Int32Array(MAX_AGENTS)
 
-  const params = { ...DEFAULT_PARAMS }
-  let elapsedTime = 0
+  const params      = { ...DEFAULT_PARAMS }
+  let   elapsedTime = 0
 
   // ── 6. Three.js instanced meshes (ES-24: prey=green, predator=red)
   const agentGeometry    = new THREE.SphereGeometry(0.5, 8, 6)
@@ -233,12 +208,15 @@ export function createSimulationEngine(): SimulationEngine {
     setUniform1f(gl, movementProgram, 'uReproThreshold',  REPRO_THRESHOLD);
     setUniform1f(gl, movementProgram, 'uReproEnergyCost', REPRO_ENERGY_COST);
 
-    // Reproduction shader uniforms (ES-16 / ES-91)
-    setUniform1f(gl, movementProgram, 'uReproThreshold',  REPRO_THRESHOLD);
-    setUniform1f(gl, movementProgram, 'uReproEnergyCost', REPRO_ENERGY_COST);
+    gl.drawArrays(gl.TRIANGLES, 0, 3)
+    swapBuffers(stateBufferA)
+    swapBuffers(stateBufferB)
 
-    // Draw fullscreen triangle → runs fragment shader for every pixel (agent)
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    // Food update pass
+    gl.useProgram(foodProgram)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, getWriteFramebuffer(foodBuffer))
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0])
+    gl.viewport(0, 0, 128, 128)
 
     // Food update pass
     gl.useProgram(foodProgram)
@@ -438,94 +416,89 @@ export function createSimulationEngine(): SimulationEngine {
     }
   }
 
-  // ── Reproduction (ES-16 / ES-91) ─────────────────────────────
-  //
-  // The GPU shader can only write to its own pixel — it cannot spawn a
-  // new agent in a different slot. So reproduction is a CPU-side pass:
-  //
-  //   1. Scan the stateB readback for agents above REPRO_THRESHOLD
-  //   2. Claim a free slot via slotManager.allocate()
-  //   3. Write child stateA + stateB into the READ texture via texSubImage2D
-  //      (the next shader tick will pick them up as live agents)
-  //   4. Write parent's halved energy back to its pixel (T-2.4.2)
-  //
-  // texSubImage2D targets the READ texture (post-swap current state) so
-  // the injected data is seen by the very next simulation tick.
-  //
+  // ── Reproduction (T-2.4.1 / T-2.4.2 / T-2.4.3 / T-3.3.1 / T-3.3.2)
   function handleReproduction(posData: Float32Array, metaData: Float32Array): void {
-    let spawned = 0;
+    let spawned = 0
 
     for (let i = 0; i < MAX_AGENTS; i++) {
-      if (spawned >= MAX_SPAWNS_PER_FRAME) break;
+      if (spawned >= MAX_SPAWNS_PER_FRAME) break
 
-      const bIdx = i * 4;
-      const alive   = metaData[bIdx + 3];
-      const energy  = metaData[bIdx + 0];
-      const age     = metaData[bIdx + 1];
-      const species = metaData[bIdx + 2];
+      const bIdx    = i * 4
+      const alive   = metaData[bIdx + 3]
+      const energy  = metaData[bIdx + 0]
+      const age     = metaData[bIdx + 1]
+      const species = metaData[bIdx + 2]
 
-      // Skip: dead, too young, below energy threshold, or on cooldown
-      if (alive   < 0.5)             continue;
-      if (age     < REPRO_MIN_AGE)   continue;
-      if (energy  < REPRO_THRESHOLD) continue;
-      if (reproCooldown[i] > 0) { reproCooldown[i]--; continue; }
+      if (alive   < 0.5)             continue
+      if (age     < REPRO_MIN_AGE)   continue
+      if (energy  < REPRO_THRESHOLD) continue
+      if (reproCooldown[i] > 0) { reproCooldown[i]--; continue }
 
-      // T-2.4.3: claim a free slot
-      const childSlot = slotManager.allocate();
-      if (childSlot === -1) break; // texture is full — no room
+      const childSlot = slotManager.allocate()
+      if (childSlot === -1) break
 
-      reproCooldown[i] = REPRO_COOLDOWN_FRAMES;
-      spawned++;
+      reproCooldown[i] = REPRO_COOLDOWN_FRAMES
+      spawned++
 
-      // ── Parent position & velocity ──────────────────────────
-      const aIdx   = i * 4;
-      const parentX  = posData[aIdx + 0];
-      const parentY  = posData[aIdx + 1];
-      const parentVX = posData[aIdx + 2];
-      const parentVY = posData[aIdx + 3];
+      const aIdx     = i * 4
+      const parentX  = posData[aIdx + 0]
+      const parentY  = posData[aIdx + 1]
+      const parentVX = posData[aIdx + 2]
+      const parentVY = posData[aIdx + 3]
 
-      // ── Child position: spawn nearby with a small random offset ─
-      const spawnAngle  = Math.random() * Math.PI * 2;
-      const spawnRadius = 2.0;
-      const childX = (parentX + Math.cos(spawnAngle) * spawnRadius + params.worldSize) % params.worldSize;
-      const childY = (parentY + Math.sin(spawnAngle) * spawnRadius + params.worldSize) % params.worldSize;
+      const spawnAngle  = Math.random() * Math.PI * 2
+      const childX = (parentX + Math.cos(spawnAngle) * 2.0 + params.worldSize) % params.worldSize
+      const childY = (parentY + Math.sin(spawnAngle) * 2.0 + params.worldSize) % params.worldSize
 
-      // ── Child velocity: parent direction + small mutation ───────
-      // This is where neuroevolution will eventually plug in (ES-3).
-      // For now it's a simple angular mutation so the child doesn't
-      // immediately walk back into the parent.
-      const mutAngle = (Math.random() - 0.5) * Math.PI * 0.5; // ±45°
-      const cosM = Math.cos(mutAngle);
-      const sinM = Math.sin(mutAngle);
-      const childVX = parentVX * cosM - parentVY * sinM;
-      const childVY = parentVX * sinM + parentVY * cosM;
+      const mutAngle = (Math.random() - 0.5) * Math.PI * 0.5
+      const cosM = Math.cos(mutAngle), sinM = Math.sin(mutAngle)
+      const childVX = parentVX * cosM - parentVY * sinM
+      const childVY = parentVX * sinM + parentVY * cosM
 
-      // ── T-2.4.2: split energy equally ──────────────────────────
-      const halfEnergy = energy * 0.5;
+      const halfEnergy = energy * 0.5
+      const childCol   = childSlot % TEX_SIZE
+      const childRow   = Math.floor(childSlot / TEX_SIZE)
 
-      // Texture pixel coords for the child slot
-      const childCol = childSlot % TEX_SIZE;
-      const childRow = Math.floor(childSlot / TEX_SIZE);
+      gl.bindTexture(gl.TEXTURE_2D, getReadTexture(stateBufferA))
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, childCol, childRow, 1, 1, gl.RGBA, gl.FLOAT,
+        new Float32Array([childX, childY, childVX, childVY]))
 
-      // Write child into the READ texture — next tick sees it as alive
-      const childStateA = new Float32Array([childX, childY, childVX, childVY]);
-      const childStateB = new Float32Array([halfEnergy, 0.0, species, 1.0]);
+      gl.bindTexture(gl.TEXTURE_2D, getReadTexture(stateBufferB))
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, childCol, childRow, 1, 1, gl.RGBA, gl.FLOAT,
+        new Float32Array([halfEnergy, 0.0, species, 1.0]))
 
-      gl.bindTexture(gl.TEXTURE_2D, getReadTexture(stateBufferA));
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, childCol, childRow, 1, 1, gl.RGBA, gl.FLOAT, childStateA);
+      const parentCol = i % TEX_SIZE
+      const parentRow = Math.floor(i / TEX_SIZE)
+      gl.bindTexture(gl.TEXTURE_2D, getReadTexture(stateBufferB))
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, parentCol, parentRow, 1, 1, gl.RGBA, gl.FLOAT,
+        new Float32Array([halfEnergy, age, species, alive]))
 
-      gl.bindTexture(gl.TEXTURE_2D, getReadTexture(stateBufferB));
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, childCol, childRow, 1, 1, gl.RGBA, gl.FLOAT, childStateB);
+      // ── T-3.3.1 + T-3.3.2: copy + mutate parent NN weights ────
+      const parentBaseRow = Math.floor(i / TEX_SIZE) * NN_PIXELS_PER_AGENT
+      const childBaseRow  = Math.floor(childSlot / TEX_SIZE) * NN_PIXELS_PER_AGENT
+      const parentWeightData = new Float32Array(NN_PIXELS_PER_AGENT * 4)
 
-      // Write parent's halved energy back to its pixel
-      const parentCol = i % TEX_SIZE;
-      const parentRow = Math.floor(i / TEX_SIZE);
-      const parentStateB = new Float32Array([halfEnergy, age, species, alive]);
+      // Read parent weights from GPU
+      gl.bindFramebuffer(gl.FRAMEBUFFER, weightBuffer.framebuffers[weightBuffer.currentIndex])
+      for (let p = 0; p < NN_PIXELS_PER_AGENT; p++) {
+        const pixel = new Float32Array(4)
+        gl.readPixels(i % TEX_SIZE, parentBaseRow + p, 1, 1, gl.RGBA, gl.FLOAT, pixel)
+        parentWeightData.set(pixel, p * 4)
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
-      gl.bindTexture(gl.TEXTURE_2D, getReadTexture(stateBufferB));
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, parentCol, parentRow, 1, 1, gl.RGBA, gl.FLOAT, parentStateB);
+      // Mutate for child
+      const childWeights = mutateWeights(parentWeightData, params.mutationRate, params.mutationStrength)
 
-      gl.bindTexture(gl.TEXTURE_2D, null);
+      // Write child weights
+      gl.bindTexture(gl.TEXTURE_2D, getReadTexture(weightBuffer))
+      for (let p = 0; p < NN_PIXELS_PER_AGENT; p++) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0,
+          childSlot % TEX_SIZE, childBaseRow + p,
+          1, 1, gl.RGBA, gl.FLOAT,
+          childWeights.slice(p * 4, p * 4 + 4))
+      }
+      gl.bindTexture(gl.TEXTURE_2D, null)
     }
   }
 
