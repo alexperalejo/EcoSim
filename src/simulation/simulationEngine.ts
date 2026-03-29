@@ -55,6 +55,10 @@ const REPRO_MIN_AGE         = 30.0
 const REPRO_COOLDOWN_FRAMES = 90
 const MAX_SPAWNS_PER_FRAME  = 8
 
+// ES-67: Predator-prey interaction tuning
+const KILL_RADIUS          = 0.8   // world-space units; predator eats prey within this distance
+const PREDATOR_ENERGY_GAIN = 35.0  // energy units gained from one kill (out of uMaxEnergy)
+
 // ── Slot Manager ─────────────────────────────────────────────────────
 class SlotManager {
   private freeSlots: Set<number>
@@ -187,6 +191,8 @@ export function createSimulationEngine(): SimulationEngine {
     setUniform1f(gl, movementProgram, 'uTime',             elapsedTime)
     setUniform1f(gl, movementProgram, 'uReproThreshold',   REPRO_THRESHOLD)
     setUniform1f(gl, movementProgram, 'uReproEnergyCost',  REPRO_ENERGY_COST)
+    setUniform1f(gl, movementProgram, 'uKillRadius',       KILL_RADIUS)
+    setUniform1f(gl, movementProgram, 'uPredatorEnergyGain', PREDATOR_ENERGY_GAIN)
     setUniform1i(gl, movementProgram, 'uNNPixelsPerAgent', NN_PIXELS_PER_AGENT)
     setUniform1f(gl, movementProgram, 'uNNTexHeight',      NN_TEX_HEIGHT)
 

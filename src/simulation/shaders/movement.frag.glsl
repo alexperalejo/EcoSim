@@ -8,8 +8,10 @@ precision highp float;
 // runs a 2-layer feedforward network to decide movement and behaviour.
 //
 // Network architecture:
-//   Inputs  (5): food distance, food angle, predator distance,
-//                predator angle, own energy (all normalised 0–1)
+//   Inputs  (5): food distance, food angle, threat/prey distance,
+//                threat/prey angle, own energy (all normalised 0–1)
+//   inputs[2/3] serve dual purpose — for prey: nearest predator;
+//                                    for predators: nearest prey
 //   Hidden  (8): tanh activation (T-3.1.4)
 //   Outputs (3): turn angle (-1→1), speed (0→1), reproduce signal (0→1)
 //
@@ -45,6 +47,10 @@ uniform float uTime;
 // Reproduction
 uniform float uReproThreshold;
 uniform float uReproEnergyCost;
+
+// ES-67: Predator-prey interaction
+uniform float uKillRadius;          // world-space distance for a kill (e.g. 0.8)
+uniform float uPredatorEnergyGain;  // energy predator absorbs from eating one prey
 
 // NN layout (passed from simulationEngine.ts)
 uniform int   uNNPixelsPerAgent;  // 19
@@ -244,7 +250,51 @@ vec2 sensePredator(vec2 pos, float mySpecies) {
   return vec2(closestDist, closestAngle);
 }
 
-// ── Main ──────────────────────────────────────────────────────────
+// ── Sensor: nearest prey ──────────────────────────────────────────
+// Mirror of sensePredator — only predators (species = 1.0) run this.
+// Returns vec2(distance_norm, angle_norm) toward the closest living prey.
+vec2 sensePrey(vec2 pos, float mySpecies) {
+  float closestDist  = 1.0;
+  float closestAngle = 0.5;
+
+  // Only predators need to sense prey
+  if (mySpecies < 0.5) return vec2(1.0, 0.5);
+
+  for (int dy = -2; dy <= 2; dy++) {
+    for (int dx = -2; dx <= 2; dx++) {
+      vec2 neighbourUV = vUv + vec2(float(dx), float(dy)) / TEX_SIZE;
+      if (neighbourUV.x < 0.0 || neighbourUV.x > 1.0 ||
+          neighbourUV.y < 0.0 || neighbourUV.y > 1.0) continue;
+
+      vec4 nStateA = texture(uStateA, neighbourUV);
+      vec4 nStateB = texture(uStateB, neighbourUV);
+
+      float nAlive   = nStateB.a;
+      float nSpecies = nStateB.b;
+
+      // Skip self, dead, and non-prey
+      if (nAlive < 0.5 || nSpecies > 0.5) continue;
+
+      vec2 nPos  = nStateA.xy;
+      vec2 delta = nPos - pos;
+
+      // Handle world wrapping
+      if (delta.x >  uWorldSize * 0.5) delta.x -= uWorldSize;
+      if (delta.x < -uWorldSize * 0.5) delta.x += uWorldSize;
+      if (delta.y >  uWorldSize * 0.5) delta.y -= uWorldSize;
+      if (delta.y < -uWorldSize * 0.5) delta.y += uWorldSize;
+
+      float dist = length(delta) / uWorldSize;
+
+      if (dist < closestDist) {
+        closestDist  = dist;
+        closestAngle = (atan(delta.y, delta.x) + 3.14159) / 6.28318;
+      }
+    }
+  }
+
+  return vec2(closestDist, closestAngle);
+}
 void main() {
   vec4 stateA = texture(uStateA, vUv);
   vec4 stateB = texture(uStateB, vUv);
@@ -275,12 +325,18 @@ void main() {
   // ── Build sensor inputs (T-3.1.2) ────────────────────────────
   vec2 foodSensor     = senseFoodNearest(pos);
   vec2 predatorSensor = sensePredator(pos, species);
+  vec2 preySensor     = sensePrey(pos, species);
+
+  // inputs[2/3] serve dual purpose:
+  //   prey    → nearest predator distance/angle (flee stimulus)
+  //   predator → nearest prey distance/angle    (hunt stimulus)
+  vec2 threatOrHunt = (species < 0.5) ? predatorSensor : preySensor;
 
   float inputs[NN_INPUTS];
-  inputs[0] = foodSensor.x;                    // food distance (0=near, 1=far)
-  inputs[1] = foodSensor.y;                    // food angle (0–1)
-  inputs[2] = predatorSensor.x;                // predator distance (0=near, 1=far)
-  inputs[3] = predatorSensor.y;                // predator angle (0–1)
+  inputs[0] = foodSensor.x;       // food distance (0=near, 1=far)
+  inputs[1] = foodSensor.y;       // food angle (0–1)
+  inputs[2] = threatOrHunt.x;     // threat/prey distance (0=near, 1=far)
+  inputs[3] = threatOrHunt.y;     // threat/prey angle (0–1)
   inputs[4] = clamp(energy / uMaxEnergy, 0.0, 1.0); // own energy (0–1)
 
   // ── Neural network forward pass (T-3.7.2) ────────────────────
@@ -321,6 +377,24 @@ void main() {
   // Reproduction metabolic cost
   if (energy > uReproThreshold) {
     energy -= uReproEnergyCost * uDeltaTime;
+  }
+
+  // ── ES-67: Predator-prey kill zone ───────────────────────────
+  // Prey: if a predator is within uKillRadius → die this tick.
+  // Predator: if prey is within uKillRadius → absorb energy.
+  // Both checks use the already-computed sensor distances (world-normalised).
+  float killDistNorm = uKillRadius / uWorldSize;
+  if (species < 0.5) {
+    // I am prey — am I being caught?
+    if (predatorSensor.x < killDistNorm) {
+      alive  = 0.0;
+      energy = 0.0;
+    }
+  } else {
+    // I am a predator — did I catch prey?
+    if (preySensor.x < killDistNorm) {
+      energy += uPredatorEnergyGain;
+    }
   }
 
   energy = clamp(energy, 0.0, uMaxEnergy);
