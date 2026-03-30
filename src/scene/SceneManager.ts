@@ -82,6 +82,12 @@ export class SceneManager {
 
     tick()
   }
+  pause() {
+  if (this._raf) {
+    cancelAnimationFrame(this._raf)
+    this._raf = null
+  }
+}
 
   resize() {
     const w = this.mountEl.clientWidth
