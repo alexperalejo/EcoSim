@@ -32,8 +32,8 @@ const SUN_SUNSET  = new THREE.Color(0xff5522)  // deep orange-red
 const SUN_NIGHT   = new THREE.Color(0x101828)  // near black
 
 // Ambient intensities
-const AMBIENT_DAY   = 0.45
-const AMBIENT_NIGHT = 0.25
+const AMBIENT_DAY   = 0.8
+const AMBIENT_NIGHT = 0.45  // Never fully dark to keep some visibility at night (moonlight)
 
 // Sun orbit radius
 const SUN_RADIUS = 140.0
