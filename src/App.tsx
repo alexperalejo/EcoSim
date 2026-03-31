@@ -1,21 +1,21 @@
 /**
  * src/App.tsx
  *
- * ES-37: Live population line charts per species (Recharts)
- * ES-73: Build population graphs with Recharts
- * Also fixes:
- *   - Slider → engine params wiring (was reading _engine which doesn't exist)
- *   - Sim speed slider now actually scales dt via SceneManager.simSpeed
- *   - getAgentStats() now returns real prey/predator counts
+ * ES-37 / ES-73: Live population charts (Recharts)
+ * ES-74: Stability score display
+ * ES-89: Plain-language stability alerts
+ * ES-32: Stability trend graph
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, Legend,
+  ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts'
 import { SceneManager } from './scene/SceneManager'
 import { getAgentStats } from './simulation'
+import { computeStability } from './simulation/lstmForecaster'
+import type { StabilityResult } from './simulation/stabilityScore'
 import './App.css'
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -45,10 +45,11 @@ interface SimControls {
 }
 
 interface PopSnapshot {
-  t:        number   // sim day (x-axis)
+  t:        number
   prey:     number
   predator: number
   alive:    number
+  stability: number  // ES-32: stability score at this moment
 }
 
 const DEFAULT_CONTROLS: SimControls = {
@@ -62,7 +63,7 @@ const DEFAULT_CONTROLS: SimControls = {
 }
 
 const DAY_DURATION_SECONDS = 240
-const POP_HISTORY_MAX      = 120   // keep last 120 samples (~2 min at 1 sample/sec)
+const POP_HISTORY_MAX      = 120
 
 // ── Slider ───────────────────────────────────────────────────────────
 
@@ -142,6 +143,61 @@ function PopTooltip({ active, payload, label }: { active?: boolean; payload?: {c
   )
 }
 
+function StabilityTooltip({ active, payload, label }: { active?: boolean; payload?: {value:number}[]; label?: number }) {
+  if (!active || !payload?.length) return null
+  const v = payload[0].value
+  return (
+    <div className="chart-tooltip">
+      <div className="chart-tooltip-title">Day {label}</div>
+      <div className="chart-tooltip-row" style={{ color: stabilityColor(v) }}>
+        <span>Stability</span>
+        <span>{(v * 100).toFixed(0)}%</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Stability helpers ─────────────────────────────────────────────────
+
+function stabilityColor(score: number): string {
+  if (score >= 0.75) return '#00e5a0'   // accent green
+  if (score >= 0.50) return '#ffcc00'   // yellow
+  if (score >= 0.25) return '#ff8800'   // orange
+  return '#ff4444'                       // red
+}
+
+function StabilityGauge({ result }: { result: StabilityResult }) {
+  const pct   = Math.round(result.score * 100)
+  const color = stabilityColor(result.score)
+  const circumference = 2 * Math.PI * 28  // r=28
+
+  return (
+    <div className="stability-gauge">
+      <svg width="72" height="72" viewBox="0 0 72 72">
+        {/* Track */}
+        <circle cx="36" cy="36" r="28" fill="none" stroke="var(--border2)" strokeWidth="5" />
+        {/* Fill */}
+        <circle
+          cx="36" cy="36" r="28" fill="none"
+          stroke={color} strokeWidth="5"
+          strokeDasharray={`${result.score * circumference} ${circumference}`}
+          strokeLinecap="round"
+          transform="rotate(-90 36 36)"
+          style={{ transition: 'stroke-dasharray 0.6s ease, stroke 0.4s ease' }}
+        />
+        <text x="36" y="33" textAnchor="middle" fill={color}
+          fontSize="14" fontWeight="700" fontFamily="Syne, sans-serif">
+          {pct}
+        </text>
+        <text x="36" y="45" textAnchor="middle" fill="var(--muted)"
+          fontSize="7" letterSpacing="1" fontFamily="DM Mono, monospace">
+          {result.label.toUpperCase()}
+        </text>
+      </svg>
+    </div>
+  )
+}
+
 // ── App ──────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -150,12 +206,15 @@ export default function App() {
   const frameRef    = useRef(0)
   const fpsCountRef = useRef(0)
   const fpsTimerRef = useRef(0)
-  const popTimerRef = useRef(0)   // tracks when to take next population sample
+  const popTimerRef = useRef(0)
 
   const [running,    setRunning]    = useState(true)
   const [controls,   setControls]   = useState<SimControls>(DEFAULT_CONTROLS)
   const [showCharts, setShowCharts] = useState(false)
   const [popHistory, setPopHistory] = useState<PopSnapshot[]>([])
+  const [stability,  setStability]  = useState<StabilityResult>({
+    score: 0.5, label: 'Stable', alert: '', alertLevel: 'none',
+  })
   const [stats, setStats] = useState<SimStats>({
     alive: 0, prey: 0, predator: 0, free: 0,
     avgEnergy: 0, avgAge: 0, fps: 0, frame: 0, generation: 0,
@@ -171,7 +230,7 @@ export default function App() {
     return () => { manager.dispose(); managerRef.current = null }
   }, [])
 
-  // Stats polling + population history sampling
+  // Stats polling + population + stability sampling
   useEffect(() => {
     let animId: number
 
@@ -203,11 +262,18 @@ export default function App() {
           timeOfDay,
         }))
 
-        // ES-37/73: sample population history once per second
         if (now - popTimerRef.current >= 1000) {
           popTimerRef.current = now
+
           setPopHistory(prev => {
-            const next = [...prev, { t: dayCount, prey: s.prey, predator: s.predator, alive: s.alive }]
+            // ES-74/32: compute stability from history so far
+            const result = computeStability(s.prey, s.predator, s.avgEnergy, prev)
+            setStability(result)
+
+            const next = [
+              ...prev,
+              { t: dayCount, prey: s.prey, predator: s.predator, alive: s.alive, stability: result.score },
+            ]
             return next.length > POP_HISTORY_MAX ? next.slice(-POP_HISTORY_MAX) : next
           })
         }
@@ -242,7 +308,7 @@ export default function App() {
     setStats(prev => ({ ...prev, frame: 0, generation: 0, dayCount: 1, timeOfDay: '12:00 PM' }))
   }, [])
 
-  // Update slider → engine params (fixed: uses SceneManager.params directly)
+  // Slider → engine params
   const updateControl = useCallback((key: keyof SimControls, value: number) => {
     setControls(prev => {
       const next    = { ...prev, [key]: value }
@@ -250,15 +316,17 @@ export default function App() {
       if (!manager) return next
 
       if (key === 'simSpeed') {
-        // Wire directly to SceneManager.simSpeed — scales dt each frame
         manager.simSpeed = value
       } else if (manager.params) {
-        // Wire to engine SimParams — read directly by GPU shader uniforms next tick
         (manager.params as Record<string, number>)[key] = value
       }
       return next
     })
   }, [])
+
+  const alertColor = stability.alertLevel === 'critical' ? 'var(--red)'
+                   : stability.alertLevel === 'warn'     ? 'var(--yellow)'
+                   : 'transparent'
 
   return (
     <div className="app-root">
@@ -286,6 +354,30 @@ export default function App() {
           <div className={`status-pill ${running ? 'pill-running' : 'pill-paused'}`}>
             <span className="status-dot" />
             {running ? 'Running' : 'Paused'}
+          </div>
+        </section>
+
+        {/* ES-74: Stability score gauge */}
+        <section className="sidebar-section">
+          <div className="section-label">ECOSYSTEM STABILITY</div>
+          <div className="stability-row">
+            <StabilityGauge result={stability} />
+            <div className="stability-breakdown">
+              <div className="stability-detail">
+                <span className="stability-detail-label">Prey/Pred ratio</span>
+                <span className="stability-detail-value">
+                  {stats.predator > 0 ? (stats.prey / stats.predator).toFixed(1) : '—'}:1
+                </span>
+              </div>
+              <div className="stability-detail">
+                <span className="stability-detail-label">Avg energy</span>
+                <span className="stability-detail-value">{stats.avgEnergy}%</span>
+              </div>
+              <div className="stability-detail">
+                <span className="stability-detail-label">Population</span>
+                <span className="stability-detail-value">{stats.alive}</span>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -326,7 +418,6 @@ export default function App() {
             onChange={v => updateControl('foodDetectRadius', v)} />
         </section>
 
-        {/* ES-37: charts toggle */}
         <section className="sidebar-section">
           <button
             className={`btn-secondary chart-toggle ${showCharts ? 'chart-toggle-active' : ''}`}
@@ -340,10 +431,19 @@ export default function App() {
 
       {/* ── Main area ── */}
       <div className="main-area">
+
+        {/* ES-89: Alert banner */}
+        {stability.alertLevel !== 'none' && (
+          <div className="alert-banner" style={{ borderColor: alertColor, color: alertColor }}>
+            <span className="alert-icon">{stability.alertLevel === 'critical' ? '⚠' : '●'}</span>
+            <span className="alert-text">{stability.alert}</span>
+          </div>
+        )}
+
         <div className="viewport-wrapper">
           <div ref={mountRef} className="viewport" />
 
-          {/* Floating HUD top-right */}
+          {/* Floating HUD */}
           <div className="hud">
             <div className="hud-item">
               <span className="hud-label">FPS</span>
@@ -372,68 +472,55 @@ export default function App() {
           </div>
         </div>
 
-        {/* ── ES-37/73: Population charts panel ── */}
+        {/* ES-37/73/32: Charts panel */}
         {showCharts && (
           <div className="charts-panel">
             <div className="charts-row">
 
-              {/* Prey vs Predator over time */}
+              {/* Population by species */}
               <div className="chart-card">
                 <div className="chart-title">Population by Species</div>
-                <ResponsiveContainer width="100%" height={140}>
+                <ResponsiveContainer width="100%" height={130}>
                   <LineChart data={popHistory} margin={{ top: 4, right: 12, bottom: 0, left: -10 }}>
-                    <XAxis
-                      dataKey="t"
+                    <XAxis dataKey="t"
                       tick={{ fill: '#4a6a80', fontSize: 9, fontFamily: 'DM Mono' }}
-                      tickLine={false}
-                      axisLine={{ stroke: '#1e2d3d' }}
-                      label={{ value: 'day', position: 'insideRight', offset: 0, fill: '#4a6a80', fontSize: 9 }}
+                      tickLine={false} axisLine={{ stroke: '#1e2d3d' }}
                     />
                     <YAxis
                       tick={{ fill: '#4a6a80', fontSize: 9, fontFamily: 'DM Mono' }}
-                      tickLine={false}
-                      axisLine={false}
+                      tickLine={false} axisLine={false}
                     />
                     <Tooltip content={<PopTooltip />} />
-                    <Legend
-                      wrapperStyle={{ fontSize: 9, fontFamily: 'DM Mono', color: '#4a6a80', paddingTop: 4 }}
-                    />
-                    <Line
-                      type="monotone" dataKey="prey" name="Prey"
-                      stroke="#44dd88" strokeWidth={1.5} dot={false}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      type="monotone" dataKey="predator" name="Predators"
-                      stroke="#ff4444" strokeWidth={1.5} dot={false}
-                      isAnimationActive={false}
-                    />
+                    <Legend wrapperStyle={{ fontSize: 9, fontFamily: 'DM Mono', color: '#4a6a80', paddingTop: 4 }} />
+                    <Line type="monotone" dataKey="prey"     name="Prey"
+                      stroke="#44dd88" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                    <Line type="monotone" dataKey="predator" name="Predators"
+                      stroke="#ff4444" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
 
-              {/* Total alive over time */}
+              {/* ES-32: Stability trend */}
               <div className="chart-card">
-                <div className="chart-title">Total Population</div>
-                <ResponsiveContainer width="100%" height={140}>
+                <div className="chart-title">Stability Trend</div>
+                <ResponsiveContainer width="100%" height={130}>
                   <LineChart data={popHistory} margin={{ top: 4, right: 12, bottom: 0, left: -10 }}>
-                    <XAxis
-                      dataKey="t"
+                    <XAxis dataKey="t"
                       tick={{ fill: '#4a6a80', fontSize: 9, fontFamily: 'DM Mono' }}
-                      tickLine={false}
-                      axisLine={{ stroke: '#1e2d3d' }}
+                      tickLine={false} axisLine={{ stroke: '#1e2d3d' }}
                     />
-                    <YAxis
+                    <YAxis domain={[0, 1]}
                       tick={{ fill: '#4a6a80', fontSize: 9, fontFamily: 'DM Mono' }}
-                      tickLine={false}
-                      axisLine={false}
+                      tickLine={false} axisLine={false}
+                      tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
                     />
-                    <Tooltip content={<PopTooltip />} />
-                    <Line
-                      type="monotone" dataKey="alive" name="Total"
-                      stroke="#00aaff" strokeWidth={1.5} dot={false}
-                      isAnimationActive={false}
-                    />
+                    <Tooltip content={<StabilityTooltip />} />
+                    {/* Reference lines for stability thresholds */}
+                    <ReferenceLine y={0.75} stroke="#00e5a0" strokeDasharray="3 3" strokeOpacity={0.3} />
+                    <ReferenceLine y={0.40} stroke="#ff8800" strokeDasharray="3 3" strokeOpacity={0.3} />
+                    <ReferenceLine y={0.20} stroke="#ff4444" strokeDasharray="3 3" strokeOpacity={0.3} />
+                    <Line type="monotone" dataKey="stability" name="Stability"
+                      stroke="#00aaff" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -452,7 +539,8 @@ export default function App() {
           <StatBadge label="AVG ENERGY" value={`${stats.avgEnergy}%`} />
           <StatBadge label="AVG AGE"    value={Math.round(stats.avgAge)} />
           <div className="stats-sep" />
-          <StatBadge label="FREE SLOTS" value={stats.free} />
+          <StatBadge label="STABILITY"  value={`${Math.round(stability.score * 100)}%`}
+            color={stabilityColor(stability.score)} />
           <div className="stats-fill" />
           <span className="stats-brand">EcoSim · CSC 583</span>
         </div>
