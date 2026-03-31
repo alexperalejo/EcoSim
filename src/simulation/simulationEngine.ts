@@ -103,7 +103,7 @@ class SlotManager {
 export interface SimulationEngine {
   update:          (dt: number) => void
   getSceneObject:  () => THREE.Object3D
-  getStats:        () => { alive: number; free: number; avgEnergy: number; avgAge: number }
+  getStats:        () => { alive: number; prey: number; predator: number; free: number; avgEnergy: number; avgAge: number }
   getNextFreeSlot: () => number
   dispose:         () => void
   params:          SimParams
@@ -362,17 +362,21 @@ export function createSimulationEngine(): SimulationEngine {
 
     getStats() {
       const metaData = readBackData(gl, stateBufferB)
-      let alive = 0, totalEnergy = 0, totalAge = 0
+      let alive = 0, prey = 0, predator = 0, totalEnergy = 0, totalAge = 0
       for (let i = 0; i < MAX_AGENTS; i++) {
         const idx = i * 4
         if (metaData[idx + 3] > 0.5) {
           alive++
           totalEnergy += metaData[idx + 0]
           totalAge    += metaData[idx + 1]
+          if (metaData[idx + 2] < 0.5) prey++
+          else predator++
         }
       }
       return {
         alive,
+        prey,
+        predator,
         free:      slotManager.freeCount,
         avgEnergy: alive > 0 ? totalEnergy / alive : 0,
         avgAge:    alive > 0 ? totalAge    / alive : 0,

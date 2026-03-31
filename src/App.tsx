@@ -1,16 +1,19 @@
 /**
  * src/App.tsx
  *
- * ES-42: Main React UI layout — left sidebar + 3D viewport + bottom stats
- * ES-36: Start / pause / reset controls
- * ES-35: Parameter sliders
- * ES-44: Simulation speed slider
- * ES-46: FPS + agent count performance dashboard
- * ES-28: Generation counter
- * + Day counter and time of day display
+ * ES-37: Live population line charts per species (Recharts)
+ * ES-73: Build population graphs with Recharts
+ * Also fixes:
+ *   - Slider → engine params wiring (was reading _engine which doesn't exist)
+ *   - Sim speed slider now actually scales dt via SceneManager.simSpeed
+ *   - getAgentStats() now returns real prey/predator counts
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, Legend,
+} from 'recharts'
 import { SceneManager } from './scene/SceneManager'
 import { getAgentStats } from './simulation'
 import './App.css'
@@ -41,6 +44,13 @@ interface SimControls {
   simSpeed:         number
 }
 
+interface PopSnapshot {
+  t:        number   // sim day (x-axis)
+  prey:     number
+  predator: number
+  alive:    number
+}
+
 const DEFAULT_CONTROLS: SimControls = {
   mutationRate:     0.05,
   mutationStrength: 0.2,
@@ -51,8 +61,8 @@ const DEFAULT_CONTROLS: SimControls = {
   simSpeed:         1.0,
 }
 
-// DAY_DURATION must match src/scene/dayNight.ts
 const DAY_DURATION_SECONDS = 240
+const POP_HISTORY_MAX      = 120   // keep last 120 samples (~2 min at 1 sample/sec)
 
 // ── Slider ───────────────────────────────────────────────────────────
 
@@ -105,7 +115,6 @@ function calcDayTime(frameCount: number, fps = 60): { dayCount: number; timeOfDa
   const dayCount     = Math.floor(totalSeconds / DAY_DURATION_SECONDS) + 1
   const timeInDay    = (totalSeconds % DAY_DURATION_SECONDS) / DAY_DURATION_SECONDS
 
-  // 0.0 = midnight, 0.25 = 6am, 0.5 = noon, 0.75 = 6pm
   const totalHours = timeInDay * 24
   const hour       = Math.floor(totalHours)
   const minute     = Math.floor((totalHours - hour) * 60)
@@ -116,6 +125,23 @@ function calcDayTime(frameCount: number, fps = 60): { dayCount: number; timeOfDa
   return { dayCount, timeOfDay }
 }
 
+// ── Custom Recharts tooltip ───────────────────────────────────────────
+
+function PopTooltip({ active, payload, label }: { active?: boolean; payload?: {color:string;name:string;value:number}[]; label?: number }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="chart-tooltip">
+      <div className="chart-tooltip-title">Day {label}</div>
+      {payload.map(p => (
+        <div key={p.name} className="chart-tooltip-row" style={{ color: p.color }}>
+          <span>{p.name}</span>
+          <span>{p.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── App ──────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -124,10 +150,13 @@ export default function App() {
   const frameRef    = useRef(0)
   const fpsCountRef = useRef(0)
   const fpsTimerRef = useRef(0)
+  const popTimerRef = useRef(0)   // tracks when to take next population sample
 
-  const [running,  setRunning]  = useState(true)
-  const [controls, setControls] = useState<SimControls>(DEFAULT_CONTROLS)
-  const [stats,    setStats]    = useState<SimStats>({
+  const [running,    setRunning]    = useState(true)
+  const [controls,   setControls]   = useState<SimControls>(DEFAULT_CONTROLS)
+  const [showCharts, setShowCharts] = useState(false)
+  const [popHistory, setPopHistory] = useState<PopSnapshot[]>([])
+  const [stats, setStats] = useState<SimStats>({
     alive: 0, prey: 0, predator: 0, free: 0,
     avgEnergy: 0, avgAge: 0, fps: 0, frame: 0, generation: 0,
     dayCount: 1, timeOfDay: '12:00 PM',
@@ -142,7 +171,7 @@ export default function App() {
     return () => { manager.dispose(); managerRef.current = null }
   }, [])
 
-  // Stats polling
+  // Stats polling + population history sampling
   useEffect(() => {
     let animId: number
 
@@ -163,20 +192,30 @@ export default function App() {
         setStats(prev => ({
           ...prev,
           alive:     s.alive,
+          prey:      s.prey,
+          predator:  s.predator,
           free:      s.free ?? 0,
           avgEnergy: Math.round(s.avgEnergy * 10) / 10,
           avgAge:    Math.round(s.avgAge * 10) / 10,
-          prey:      Math.round(s.alive * 0.8),
-          predator:  Math.round(s.alive * 0.2),
           fps,
           frame:     frameRef.current,
           dayCount,
           timeOfDay,
         }))
+
+        // ES-37/73: sample population history once per second
+        if (now - popTimerRef.current >= 1000) {
+          popTimerRef.current = now
+          setPopHistory(prev => {
+            const next = [...prev, { t: dayCount, prey: s.prey, predator: s.predator, alive: s.alive }]
+            return next.length > POP_HISTORY_MAX ? next.slice(-POP_HISTORY_MAX) : next
+          })
+        }
       }
     }
 
     fpsTimerRef.current = performance.now()
+    popTimerRef.current = performance.now()
     animId = requestAnimationFrame(poll)
     return () => cancelAnimationFrame(animId)
   }, [])
@@ -199,17 +238,23 @@ export default function App() {
     m.start()
     setRunning(true)
     frameRef.current = 0
+    setPopHistory([])
     setStats(prev => ({ ...prev, frame: 0, generation: 0, dayCount: 1, timeOfDay: '12:00 PM' }))
   }, [])
 
-  // Update slider → push to engine params
+  // Update slider → engine params (fixed: uses SceneManager.params directly)
   const updateControl = useCallback((key: keyof SimControls, value: number) => {
     setControls(prev => {
       const next    = { ...prev, [key]: value }
-      const manager = managerRef.current as unknown as { _engine?: { params?: Record<string, number> } }
-      const engine  = manager?._engine
-      if (engine?.params && key !== 'simSpeed') {
-        engine.params[key] = value
+      const manager = managerRef.current
+      if (!manager) return next
+
+      if (key === 'simSpeed') {
+        // Wire directly to SceneManager.simSpeed — scales dt each frame
+        manager.simSpeed = value
+      } else if (manager.params) {
+        // Wire to engine SimParams — read directly by GPU shader uniforms next tick
+        (manager.params as Record<string, number>)[key] = value
       }
       return next
     })
@@ -281,9 +326,19 @@ export default function App() {
             onChange={v => updateControl('foodDetectRadius', v)} />
         </section>
 
+        {/* ES-37: charts toggle */}
+        <section className="sidebar-section">
+          <button
+            className={`btn-secondary chart-toggle ${showCharts ? 'chart-toggle-active' : ''}`}
+            onClick={() => setShowCharts(s => !s)}
+          >
+            {showCharts ? '▼ Hide Charts' : '▶ Population Charts'}
+          </button>
+        </section>
+
       </aside>
 
-      {/* ── Main: viewport + stats bar ── */}
+      {/* ── Main area ── */}
       <div className="main-area">
         <div className="viewport-wrapper">
           <div ref={mountRef} className="viewport" />
@@ -316,6 +371,76 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {/* ── ES-37/73: Population charts panel ── */}
+        {showCharts && (
+          <div className="charts-panel">
+            <div className="charts-row">
+
+              {/* Prey vs Predator over time */}
+              <div className="chart-card">
+                <div className="chart-title">Population by Species</div>
+                <ResponsiveContainer width="100%" height={140}>
+                  <LineChart data={popHistory} margin={{ top: 4, right: 12, bottom: 0, left: -10 }}>
+                    <XAxis
+                      dataKey="t"
+                      tick={{ fill: '#4a6a80', fontSize: 9, fontFamily: 'DM Mono' }}
+                      tickLine={false}
+                      axisLine={{ stroke: '#1e2d3d' }}
+                      label={{ value: 'day', position: 'insideRight', offset: 0, fill: '#4a6a80', fontSize: 9 }}
+                    />
+                    <YAxis
+                      tick={{ fill: '#4a6a80', fontSize: 9, fontFamily: 'DM Mono' }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip content={<PopTooltip />} />
+                    <Legend
+                      wrapperStyle={{ fontSize: 9, fontFamily: 'DM Mono', color: '#4a6a80', paddingTop: 4 }}
+                    />
+                    <Line
+                      type="monotone" dataKey="prey" name="Prey"
+                      stroke="#44dd88" strokeWidth={1.5} dot={false}
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      type="monotone" dataKey="predator" name="Predators"
+                      stroke="#ff4444" strokeWidth={1.5} dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Total alive over time */}
+              <div className="chart-card">
+                <div className="chart-title">Total Population</div>
+                <ResponsiveContainer width="100%" height={140}>
+                  <LineChart data={popHistory} margin={{ top: 4, right: 12, bottom: 0, left: -10 }}>
+                    <XAxis
+                      dataKey="t"
+                      tick={{ fill: '#4a6a80', fontSize: 9, fontFamily: 'DM Mono' }}
+                      tickLine={false}
+                      axisLine={{ stroke: '#1e2d3d' }}
+                    />
+                    <YAxis
+                      tick={{ fill: '#4a6a80', fontSize: 9, fontFamily: 'DM Mono' }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip content={<PopTooltip />} />
+                    <Line
+                      type="monotone" dataKey="alive" name="Total"
+                      stroke="#00aaff" strokeWidth={1.5} dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+            </div>
+          </div>
+        )}
 
         {/* Stats bar */}
         <div className="stats-bar">
