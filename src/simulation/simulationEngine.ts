@@ -47,17 +47,14 @@ const movementFrag = _movementFrag.trim();
 const foodFrag     = _foodFrag.trim();
 
 // ── Constants ────────────────────────────────────────────────────────
-const MAX_AGENTS = TEX_SIZE * TEX_SIZE  // 4096
-
+const MAX_AGENTS            = TEX_SIZE * TEX_SIZE  // 4096
 const REPRO_THRESHOLD       = 80.0
 const REPRO_ENERGY_COST     = 5.0
 const REPRO_MIN_AGE         = 30.0
 const REPRO_COOLDOWN_FRAMES = 90
 const MAX_SPAWNS_PER_FRAME  = 8
-
-// ES-67: Predator-prey interaction tuning
-const KILL_RADIUS          = 0.8   // world-space units; predator eats prey within this distance
-const PREDATOR_ENERGY_GAIN = 35.0  // energy units gained from one kill (out of uMaxEnergy)
+const KILL_RADIUS           = 0.8
+const PREDATOR_ENERGY_GAIN  = 35.0
 
 // ── Slot Manager ─────────────────────────────────────────────────────
 class SlotManager {
@@ -103,7 +100,7 @@ class SlotManager {
 export interface SimulationEngine {
   update:          (dt: number) => void
   getSceneObject:  () => THREE.Object3D
-  getStats:        () => { alive: number; free: number; avgEnergy: number; avgAge: number }
+  getStats:        () => { alive: number; prey: number; predator: number; free: number; avgEnergy: number; avgAge: number }
   getNextFreeSlot: () => number
   dispose:         () => void
   params:          SimParams
@@ -112,37 +109,29 @@ export interface SimulationEngine {
 // ── Engine ───────────────────────────────────────────────────────────
 export function createSimulationEngine(): SimulationEngine {
 
-  // ── 1. WebGL2 context ─────────────────────────────────────────
   const computeCanvas = document.createElement('canvas')
   computeCanvas.width  = TEX_SIZE
   computeCanvas.height = TEX_SIZE
   const gl = computeCanvas.getContext('webgl2')!
   if (!gl) throw new Error('WebGL2 not supported.')
 
-  // ── 2. Ping-pong buffers ──────────────────────────────────────
-  const stateBufferA = createPingPongBuffer(gl, TEX_SIZE,      TEX_SIZE,      createInitialStateA(INITIAL_AGENT_COUNT))
-  const stateBufferB = createPingPongBuffer(gl, TEX_SIZE,      TEX_SIZE,      createInitialStateB(INITIAL_AGENT_COUNT))
-  const foodBuffer   = createPingPongBuffer(gl, 128,           128,           createInitialFoodTexture(128))
+  const stateBufferA = createPingPongBuffer(gl, TEX_SIZE,     TEX_SIZE,     createInitialStateA(INITIAL_AGENT_COUNT))
+  const stateBufferB = createPingPongBuffer(gl, TEX_SIZE,     TEX_SIZE,     createInitialStateB(INITIAL_AGENT_COUNT))
+  const foodBuffer   = createPingPongBuffer(gl, 128,          128,          createInitialFoodTexture(128))
+  const weightBuffer = createPingPongBuffer(gl, NN_TEX_WIDTH, NN_TEX_HEIGHT, createInitialWeightTexture(INITIAL_AGENT_COUNT))
 
-  // T-3.7.1: Third buffer for neural network weights
-  const weightBuffer = createPingPongBuffer(gl, NN_TEX_WIDTH,  NN_TEX_HEIGHT, createInitialWeightTexture(INITIAL_AGENT_COUNT))
-
-  // ── 3. Shaders ────────────────────────────────────────────────
   const movementProgram = createProgram(gl, quadVert, movementFrag)
   const foodProgram     = createProgram(gl, quadVert, foodFrag)
 
-  // ── 4. VAO + MRT framebuffer ──────────────────────────────────
   const vao            = gl.createVertexArray()
   const mrtFramebuffer = gl.createFramebuffer()
 
-  // ── 5. Slot manager + reproduction cooldown ───────────────────
   const slotManager   = new SlotManager(INITIAL_AGENT_COUNT)
   const reproCooldown = new Int32Array(MAX_AGENTS)
 
   const params      = { ...DEFAULT_PARAMS }
   let   elapsedTime = 0
 
-  // ── 6. Three.js instanced meshes (ES-24: prey=green, predator=red)
   const agentGeometry    = new THREE.SphereGeometry(0.5, 8, 6)
   const preyMaterial     = new THREE.MeshLambertMaterial({ color: 0x44dd88 })
   const predatorMaterial = new THREE.MeshLambertMaterial({ color: 0xff4444 })
@@ -164,7 +153,6 @@ export function createSimulationEngine(): SimulationEngine {
   function runSimulationTick(dt: number): void {
     elapsedTime += dt
 
-    // Movement pass — MRT writes stateA + stateB simultaneously
     gl.bindVertexArray(vao)
     gl.useProgram(movementProgram)
 
@@ -177,30 +165,28 @@ export function createSimulationEngine(): SimulationEngine {
     setTextureUniform(gl, movementProgram, 'uStateA',  getReadTexture(stateBufferA), 0)
     setTextureUniform(gl, movementProgram, 'uStateB',  getReadTexture(stateBufferB), 1)
     setTextureUniform(gl, movementProgram, 'uFood',    getReadTexture(foodBuffer),   2)
-    // T-3.7.2: weight texture for neural network forward pass
     setTextureUniform(gl, movementProgram, 'uWeights', getReadTexture(weightBuffer), 3)
 
-    setUniform1f(gl, movementProgram, 'uDeltaTime',        dt)
-    setUniform1f(gl, movementProgram, 'uMoveSpeed',        params.moveSpeed)
-    setUniform1f(gl, movementProgram, 'uMoveEnergyCost',   params.moveEnergyCost)
-    setUniform1f(gl, movementProgram, 'uFoodEnergyGain',   params.foodEnergyGain)
-    setUniform1f(gl, movementProgram, 'uMaxAge',           params.maxAge)
-    setUniform1f(gl, movementProgram, 'uMaxEnergy',        params.maxEnergy)
-    setUniform1f(gl, movementProgram, 'uWorldSize',        params.worldSize)
-    setUniform1f(gl, movementProgram, 'uFoodDetectRadius', params.foodDetectRadius)
-    setUniform1f(gl, movementProgram, 'uTime',             elapsedTime)
-    setUniform1f(gl, movementProgram, 'uReproThreshold',   REPRO_THRESHOLD)
-    setUniform1f(gl, movementProgram, 'uReproEnergyCost',  REPRO_ENERGY_COST)
-    setUniform1f(gl, movementProgram, 'uKillRadius',       KILL_RADIUS)
+    setUniform1f(gl, movementProgram, 'uDeltaTime',          dt)
+    setUniform1f(gl, movementProgram, 'uMoveSpeed',          params.moveSpeed)
+    setUniform1f(gl, movementProgram, 'uMoveEnergyCost',     params.moveEnergyCost)
+    setUniform1f(gl, movementProgram, 'uFoodEnergyGain',     params.foodEnergyGain)
+    setUniform1f(gl, movementProgram, 'uMaxAge',             params.maxAge)
+    setUniform1f(gl, movementProgram, 'uMaxEnergy',          params.maxEnergy)
+    setUniform1f(gl, movementProgram, 'uWorldSize',          params.worldSize)
+    setUniform1f(gl, movementProgram, 'uFoodDetectRadius',   params.foodDetectRadius)
+    setUniform1f(gl, movementProgram, 'uTime',               elapsedTime)
+    setUniform1f(gl, movementProgram, 'uReproThreshold',     REPRO_THRESHOLD)
+    setUniform1f(gl, movementProgram, 'uReproEnergyCost',    REPRO_ENERGY_COST)
+    setUniform1f(gl, movementProgram, 'uKillRadius',         KILL_RADIUS)
     setUniform1f(gl, movementProgram, 'uPredatorEnergyGain', PREDATOR_ENERGY_GAIN)
-    setUniform1i(gl, movementProgram, 'uNNPixelsPerAgent', NN_PIXELS_PER_AGENT)
-    setUniform1f(gl, movementProgram, 'uNNTexHeight',      NN_TEX_HEIGHT)
+    setUniform1i(gl, movementProgram, 'uNNPixelsPerAgent',   NN_PIXELS_PER_AGENT)
+    setUniform1f(gl, movementProgram, 'uNNTexHeight',        NN_TEX_HEIGHT)
 
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     swapBuffers(stateBufferA)
     swapBuffers(stateBufferB)
 
-    // Food update pass
     gl.useProgram(foodProgram)
     gl.bindFramebuffer(gl.FRAMEBUFFER, getWriteFramebuffer(foodBuffer))
     gl.drawBuffers([gl.COLOR_ATTACHMENT0])
@@ -221,7 +207,7 @@ export function createSimulationEngine(): SimulationEngine {
     gl.bindVertexArray(null)
   }
 
-  // ── Reproduction (T-2.4.1 / T-2.4.2 / T-2.4.3 / T-3.3.1 / T-3.3.2)
+  // ── Reproduction ──────────────────────────────────────────────
   function handleReproduction(posData: Float32Array, metaData: Float32Array): void {
     let spawned = 0
 
@@ -251,7 +237,7 @@ export function createSimulationEngine(): SimulationEngine {
       const parentVX = posData[aIdx + 2]
       const parentVY = posData[aIdx + 3]
 
-      const spawnAngle  = Math.random() * Math.PI * 2
+      const spawnAngle = Math.random() * Math.PI * 2
       const childX = (parentX + Math.cos(spawnAngle) * 2.0 + params.worldSize) % params.worldSize
       const childY = (parentY + Math.sin(spawnAngle) * 2.0 + params.worldSize) % params.worldSize
 
@@ -278,12 +264,10 @@ export function createSimulationEngine(): SimulationEngine {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, parentCol, parentRow, 1, 1, gl.RGBA, gl.FLOAT,
         new Float32Array([halfEnergy, age, species, alive]))
 
-      // ── T-3.3.1 + T-3.3.2: copy + mutate parent NN weights ────
       const parentBaseRow = Math.floor(i / TEX_SIZE) * NN_PIXELS_PER_AGENT
       const childBaseRow  = Math.floor(childSlot / TEX_SIZE) * NN_PIXELS_PER_AGENT
       const parentWeightData = new Float32Array(NN_PIXELS_PER_AGENT * 4)
 
-      // Read parent weights from GPU
       gl.bindFramebuffer(gl.FRAMEBUFFER, weightBuffer.framebuffers[weightBuffer.currentIndex])
       for (let p = 0; p < NN_PIXELS_PER_AGENT; p++) {
         const pixel = new Float32Array(4)
@@ -292,10 +276,8 @@ export function createSimulationEngine(): SimulationEngine {
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
-      // Mutate for child
       const childWeights = mutateWeights(parentWeightData, params.mutationRate, params.mutationStrength)
 
-      // Write child weights
       gl.bindTexture(gl.TEXTURE_2D, getReadTexture(weightBuffer))
       for (let p = 0; p < NN_PIXELS_PER_AGENT; p++) {
         gl.texSubImage2D(gl.TEXTURE_2D, 0,
@@ -362,17 +344,21 @@ export function createSimulationEngine(): SimulationEngine {
 
     getStats() {
       const metaData = readBackData(gl, stateBufferB)
-      let alive = 0, totalEnergy = 0, totalAge = 0
+      let alive = 0, prey = 0, predator = 0, totalEnergy = 0, totalAge = 0
       for (let i = 0; i < MAX_AGENTS; i++) {
         const idx = i * 4
         if (metaData[idx + 3] > 0.5) {
           alive++
           totalEnergy += metaData[idx + 0]
           totalAge    += metaData[idx + 1]
+          if (metaData[idx + 2] < 0.5) prey++
+          else predator++
         }
       }
       return {
         alive,
+        prey,
+        predator,
         free:      slotManager.freeCount,
         avgEnergy: alive > 0 ? totalEnergy / alive : 0,
         avgAge:    alive > 0 ? totalAge    / alive : 0,
@@ -406,13 +392,14 @@ let engine: SimulationEngine | null = null
 
 export function createAgents(): THREE.Object3D {
   engine = createSimulationEngine()
+  ;(window as any).__ecoEngine = engine
   return engine.getSceneObject()
 }
 
 export function updateAgents(dt: number): void { engine?.update(dt) }
 
 export function getAgentStats() {
-  return engine?.getStats() ?? { alive: 0, free: 0, avgEnergy: 0, avgAge: 0 }
+  return engine?.getStats() ?? { alive: 0, prey: 0, predator: 0, free: 0, avgEnergy: 0, avgAge: 0 }
 }
 
 export function disposeAgents(): void {
