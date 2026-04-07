@@ -19,7 +19,10 @@ import { createTerrain } from '../rendering/terrain'
 import { createAgents, updateAgents, disposeAgents } from '../simulation'
 import { updateDayNight } from './dayNight'
 import type { SceneLights } from './createLights'
+<<<<<<< HEAD
 import type { SimParams } from '../simulation'
+=======
+>>>>>>> origin/dev
 
 export class SceneManager {
   private mountEl: HTMLDivElement
@@ -31,10 +34,13 @@ export class SceneManager {
   private _raf: number | null = null
   private _onResize: () => void
   private lights: SceneLights
+<<<<<<< HEAD
 
   // ES-37: exposed so App.tsx can wire sliders and sim speed
   public params: SimParams | null = null
   public simSpeed: number = 1.0
+=======
+>>>>>>> origin/dev
 
   constructor(mountEl: HTMLDivElement) {
     this.mountEl = mountEl
@@ -63,6 +69,7 @@ export class SceneManager {
     this.scene.add(new THREE.AxesHelper(10))
 
     // ── GPU Agents ────────────────────────────────────────────────
+<<<<<<< HEAD
     const agentObj = createAgents()
     this.scene.add(agentObj)
 
@@ -70,6 +77,10 @@ export class SceneManager {
     const w = window as unknown as { __ecoEngine?: { params: SimParams } }
     if (w.__ecoEngine) this.params = w.__ecoEngine.params
 
+=======
+    this.scene.add(createAgents())
+
+>>>>>>> origin/dev
     this.clock = new THREE.Clock()
 
     this._onResize = () => this.resize()
@@ -82,7 +93,11 @@ export class SceneManager {
     if (this._raf) return
 
     const tick = () => {
+<<<<<<< HEAD
       const dt = this.clock.getDelta() * this.simSpeed
+=======
+      const dt = this.clock.getDelta()
+>>>>>>> origin/dev
       updateAgents(dt)
       updateDayNight(this.clock.elapsedTime, this.lights.sun, this.lights.ambient, this.scene)
       this.controls.update()
