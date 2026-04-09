@@ -107,7 +107,7 @@ export interface SimulationEngine {
 }
 
 // ── Engine ───────────────────────────────────────────────────────────
-export function createSimulationEngine(): SimulationEngine {
+export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUNT): SimulationEngine {
 
   const computeCanvas = document.createElement('canvas')
   computeCanvas.width  = TEX_SIZE
@@ -115,10 +115,12 @@ export function createSimulationEngine(): SimulationEngine {
   const gl = computeCanvas.getContext('webgl2')!
   if (!gl) throw new Error('WebGL2 not supported.')
 
-  const stateBufferA = createPingPongBuffer(gl, TEX_SIZE,     TEX_SIZE,     createInitialStateA(INITIAL_AGENT_COUNT))
-  const stateBufferB = createPingPongBuffer(gl, TEX_SIZE,     TEX_SIZE,     createInitialStateB(INITIAL_AGENT_COUNT))
+  const clampedCount = Math.min(initialCount, MAX_AGENTS)
+
+  const stateBufferA = createPingPongBuffer(gl, TEX_SIZE,     TEX_SIZE,     createInitialStateA(clampedCount))
+  const stateBufferB = createPingPongBuffer(gl, TEX_SIZE,     TEX_SIZE,     createInitialStateB(clampedCount))
   const foodBuffer   = createPingPongBuffer(gl, 128,          128,          createInitialFoodTexture(128))
-  const weightBuffer = createPingPongBuffer(gl, NN_TEX_WIDTH, NN_TEX_HEIGHT, createInitialWeightTexture(INITIAL_AGENT_COUNT))
+  const weightBuffer = createPingPongBuffer(gl, NN_TEX_WIDTH, NN_TEX_HEIGHT, createInitialWeightTexture(clampedCount))
 
   const movementProgram = createProgram(gl, quadVert, movementFrag)
   const foodProgram     = createProgram(gl, quadVert, foodFrag)
@@ -126,7 +128,7 @@ export function createSimulationEngine(): SimulationEngine {
   const vao            = gl.createVertexArray()
   const mrtFramebuffer = gl.createFramebuffer()
 
-  const slotManager   = new SlotManager(INITIAL_AGENT_COUNT)
+  const slotManager   = new SlotManager(clampedCount)
   const reproCooldown = new Int32Array(MAX_AGENTS)
 
   const params      = { ...DEFAULT_PARAMS }
@@ -393,8 +395,16 @@ let engine: SimulationEngine | null = null
 export function createAgents(): THREE.Object3D {
   engine = createSimulationEngine()
   ;(window as any).__ecoEngine = engine
+
+  // Expose benchmark utility in dev console: await window.__ecoBenchmark.run()
+  import('./benchmark').then(({ ecoBenchmark }) => {
+    ;(window as any).__ecoBenchmark = ecoBenchmark
+    console.info('[EcoSim] Benchmark ready → await window.__ecoBenchmark.run()')
+  })
+
   return engine.getSceneObject()
 }
+
 
 export function updateAgents(dt: number): void { engine?.update(dt) }
 

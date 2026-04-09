@@ -14,3 +14,5 @@ export {
 
 export { DEFAULT_PARAMS, TEX_SIZE, WORLD_SIZE } from './agentState';
 export type { SimParams } from './agentState';
+export { ecoBenchmark } from './benchmark';
+export type { BenchmarkResult } from './benchmark';
