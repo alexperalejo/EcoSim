@@ -9,6 +9,9 @@ export {
   createAgents,
   updateAgents,
   getAgentStats,
+  getAgentData,
+  updateScreenPositions,
+  pickAgent,
   disposeAgents,
 } from './simulationEngine';
 

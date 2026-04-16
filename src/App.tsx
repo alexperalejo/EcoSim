@@ -13,7 +13,8 @@ import {
   ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts'
 import { SceneManager } from './scene/SceneManager'
-import { getAgentStats } from './simulation'
+import { getAgentStats, getAgentData } from './simulation'
+import type { AgentData } from './simulation/simulationEngine'
 import { computeStability } from './simulation/lstmForecaster'
 import type { StabilityResult } from './simulation/stabilityScore'
 import './App.css'
@@ -198,6 +199,107 @@ function StabilityGauge({ result }: { result: StabilityResult }) {
   )
 }
 
+const GITHUB_URL = 'https://github.com/alexperalejo/EcoSim'
+
+// ── NN Weight Heatmap ─────────────────────────────────────────────────
+function NNHeatmap({ weights }: { weights: Float32Array }) {
+  const W = 5, H = 8, cellW = 16, cellH = 12
+  const cells = []
+  for (let h = 0; h < H; h++) {
+    for (let i = 0; i < W; i++) {
+      const w   = weights[h * W + i] ?? 0
+      const abs = Math.min(Math.abs(w), 1.0)
+      const r   = w > 0 ? 0   : Math.round(abs * 255)
+      const g   = w > 0 ? Math.round(abs * 229) : Math.round(abs * 68)
+      const b   = w > 0 ? Math.round(abs * 160) : Math.round(abs * 68)
+      cells.push(<rect key={h * W + i} x={i * cellW} y={h * cellH} width={cellW - 1} height={cellH - 1}
+        fill={`rgb(${r},${g},${b})`} opacity={0.3 + abs * 0.7} rx="1" />)
+    }
+  }
+  return <svg width={W * cellW} height={H * cellH} style={{ display: 'block' }}>{cells}</svg>
+}
+
+// ── Agent Inspector ───────────────────────────────────────────────────
+function AgentInspector({ slot, onClose }: { slot: number; onClose: () => void }) {
+  const [data, setData] = useState<AgentData | null>(null)
+  useEffect(() => {
+    const update = () => { const d = getAgentData(slot); if (d) setData(d); else onClose() }
+    update()
+    const id = setInterval(update, 100)
+    return () => clearInterval(id)
+  }, [slot, onClose])
+  if (!data) return null
+  const energyPct    = Math.round(data.energy)
+  const speedMag     = Math.sqrt(data.velX ** 2 + data.velY ** 2)
+  const isPrey       = data.species === 'prey'
+  const speciesColor = isPrey ? '#44dd88' : '#ff4444'
+  return (
+    <div className="agent-inspector">
+      <div className="inspector-header">
+        <div className="inspector-title">
+          <span className="inspector-dot" style={{ background: speciesColor }} />
+          <span style={{ color: speciesColor }}>{isPrey ? 'PREY' : 'PREDATOR'}</span>
+          <span className="inspector-slot">#{slot}</span>
+        </div>
+        <button className="inspector-close" onClick={onClose}>✕</button>
+      </div>
+      <div className="inspector-body">
+        <div className="inspector-row">
+          <span className="inspector-label">Energy</span>
+          <div className="inspector-bar-wrap">
+            <div className="inspector-bar" style={{ width: `${energyPct}%`, background: energyPct > 50 ? '#00e5a0' : energyPct > 25 ? '#ffcc00' : '#ff4444' }} />
+          </div>
+          <span className="inspector-val">{energyPct}</span>
+        </div>
+        <div className="inspector-row">
+          <span className="inspector-label">Age</span>
+          <span className="inspector-val-full">{Math.round(data.age)} ticks</span>
+        </div>
+        <div className="inspector-row">
+          <span className="inspector-label">Speed</span>
+          <span className="inspector-val-full">{speedMag.toFixed(2)} u/s</span>
+        </div>
+        <div className="inspector-row">
+          <span className="inspector-label">Position</span>
+          <span className="inspector-val-full">{data.posX.toFixed(1)}, {data.posY.toFixed(1)}</span>
+        </div>
+        <div className="inspector-section-label">INPUT→HIDDEN WEIGHTS</div>
+        <div className="inspector-heatmap-wrap">
+          <NNHeatmap weights={data.weights} />
+          <div className="inspector-heatmap-legend">
+            <span style={{ color: '#00e5a0' }}>■ positive</span>
+            <span style={{ color: '#ff4444' }}>■ negative</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Info Modal ────────────────────────────────────────────────────────
+function InfoModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="logo-eco">Eco</span><span className="logo-sim">Sim</span>
+          <button className="inspector-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <p>A GPU-accelerated 3D ecosystem simulator built for CSC 583. Agents evolve neural networks in real time via neuroevolution on the GPU.</p>
+          <div className="modal-section">TECH STACK</div>
+          <p>React 19 · TypeScript · Three.js · WebGL2 compute shaders · TensorFlow.js · Recharts</p>
+          <div className="modal-section">HOW IT WORKS</div>
+          <p>Agent state is stored in float32 textures on the GPU. Each frame, a GLSL fragment shader runs a 5→8→3 neural network per agent, updating position, energy, and species interactions. Reproduction and weight mutation happen CPU-side via texSubImage2D.</p>
+          <div className="modal-section">STABILITY FORECASTER</div>
+          <p>A pre-trained LSTM model predicts ecosystem collapse probability from a 30-tick sliding window of population history, trained on synthetic Lotka-Volterra ODE trajectories.</p>
+          <a className="modal-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">View source on GitHub →</a>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── App ──────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -208,10 +310,12 @@ export default function App() {
   const fpsTimerRef = useRef(0)
   const popTimerRef = useRef(0)
 
-  const [running,    setRunning]    = useState(true)
-  const [controls,   setControls]   = useState<SimControls>(DEFAULT_CONTROLS)
-  const [showCharts, setShowCharts] = useState(false)
-  const [popHistory, setPopHistory] = useState<PopSnapshot[]>([])
+  const [running,       setRunning]       = useState(true)
+  const [controls,      setControls]      = useState<SimControls>(DEFAULT_CONTROLS)
+  const [showCharts,    setShowCharts]    = useState(false)
+  const [showInfo,      setShowInfo]      = useState(false)
+  const [selectedSlot,  setSelectedSlot]  = useState<number | null>(null)
+  const [popHistory,    setPopHistory]    = useState<PopSnapshot[]>([])
   const [stability,  setStability]  = useState<StabilityResult>({
     score: 0.5, label: 'Stable', alert: '', alertLevel: 'none',
   })
@@ -226,6 +330,7 @@ export default function App() {
     if (!mountRef.current) return
     const manager = new SceneManager(mountRef.current)
     managerRef.current = manager
+    manager.onAgentClick = (slot) => setSelectedSlot(slot)
     manager.start()
     return () => { manager.dispose(); managerRef.current = null }
   }, [])
@@ -301,10 +406,12 @@ export default function App() {
     managerRef.current.dispose()
     const m = new SceneManager(mountRef.current)
     managerRef.current = m
+    m.onAgentClick = (slot) => setSelectedSlot(slot)
     m.start()
     setRunning(true)
     frameRef.current = 0
     setPopHistory([])
+    setSelectedSlot(null)
     setStats(prev => ({ ...prev, frame: 0, generation: 0, dayCount: 1, timeOfDay: '12:00 PM' }))
   }, [])
 
@@ -444,8 +551,7 @@ export default function App() {
           <div ref={mountRef} className="viewport" />
 
           {/* Floating HUD */}
-          <div className="hud">
-            <div className="hud-item">
+          <div className="hud">            <div className="hud-item">
               <span className="hud-label">FPS</span>
               <span className={`hud-value ${stats.fps < 20 ? 'hud-warn' : ''}`}>{stats.fps}</span>
             </div>
@@ -470,6 +576,11 @@ export default function App() {
               <span className="hud-value">{stats.timeOfDay}</span>
             </div>
           </div>
+
+          {/* Agent inspector — slides in from top-right when an agent is clicked */}
+          {selectedSlot !== null && (
+            <AgentInspector slot={selectedSlot} onClose={() => setSelectedSlot(null)} />
+          )}
         </div>
 
         {/* ES-37/73/32: Charts panel */}
@@ -542,9 +653,13 @@ export default function App() {
           <StatBadge label="STABILITY"  value={`${Math.round(stability.score * 100)}%`}
             color={stabilityColor(stability.score)} />
           <div className="stats-fill" />
+          <button className="info-btn" onClick={() => setShowInfo(true)}>ⓘ</button>
           <span className="stats-brand">EcoSim · CSC 583</span>
         </div>
       </div>
+
+      {/* Info modal */}
+      {showInfo && <InfoModal onClose={() => setShowInfo(false)} />}
 
     </div>
   )

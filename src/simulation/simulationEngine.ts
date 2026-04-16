@@ -97,13 +97,29 @@ class SlotManager {
 }
 
 // ── Types ────────────────────────────────────────────────────────────
+export interface AgentData {
+  slot:    number
+  energy:  number
+  age:     number
+  species: 'prey' | 'predator'
+  alive:   boolean
+  posX:    number
+  posY:    number
+  velX:    number
+  velY:    number
+  weights: Float32Array
+}
+
 export interface SimulationEngine {
-  update:          (dt: number) => void
-  getSceneObject:  () => THREE.Object3D
-  getStats:        () => { alive: number; prey: number; predator: number; free: number; avgEnergy: number; avgAge: number }
-  getNextFreeSlot: () => number
-  dispose:         () => void
-  params:          SimParams
+  update:                  (dt: number) => void
+  getSceneObject:          () => THREE.Object3D
+  getStats:                () => { alive: number; prey: number; predator: number; free: number; avgEnergy: number; avgAge: number }
+  getAgentData:            (slot: number) => AgentData | null
+  updateScreenPositions:   (camera: THREE.Camera, viewW: number, viewH: number) => void
+  pickAgent:               (clickPxX: number, clickPxY: number) => number
+  getNextFreeSlot:         () => number
+  dispose:                 () => void
+  params:                  SimParams
 }
 
 // ── Engine ───────────────────────────────────────────────────────────
@@ -135,6 +151,8 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
   let   elapsedTime = 0
 
   const agentGeometry    = new THREE.SphereGeometry(0.5, 8, 6)
+  agentGeometry.computeBoundingSphere()
+  agentGeometry.computeBoundingBox()
   const preyMaterial     = new THREE.MeshLambertMaterial({ color: 0x44dd88 })
   const predatorMaterial = new THREE.MeshLambertMaterial({ color: 0xff4444 })
 
@@ -150,6 +168,18 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
   sceneGroup.name  = 'GPUAgents'
   sceneGroup.add(preyMesh)
   sceneGroup.add(predatorMesh)
+
+  // Cache last readback so getAgentData() doesn't need extra GPU reads
+  let lastPosData:  Float32Array = new Float32Array(TEX_SIZE * TEX_SIZE * 4)
+  let lastMetaData: Float32Array = new Float32Array(TEX_SIZE * TEX_SIZE * 4)
+
+  // Stores the exact world XYZ used for rendering each agent (including terrain Y)
+  // Index i maps directly to agent slot i. Y=-99999 means slot is dead/unused.
+  const worldPositions = new Float32Array(MAX_AGENTS * 3).fill(-99999)
+
+  // Screen-space XY of each agent in pixels, updated every frame by updateScreenPositions()
+  // X=-1 means the slot is dead or behind camera
+  const screenPositions = new Float32Array(MAX_AGENTS * 2).fill(-1)
 
   // ── Simulation tick ───────────────────────────────────────────
   function runSimulationTick(dt: number): void {
@@ -298,6 +328,12 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
     const posData  = readBackData(gl, stateBufferA)
     const metaData = readBackData(gl, stateBufferB)
 
+    lastPosData  = posData
+    lastMetaData = metaData
+
+    // Clear all world positions — will be repopulated for alive agents only
+    worldPositions.fill(-99999)
+
     syncFrame++
     if (syncFrame % 10 === 0) slotManager.syncFromGPU(metaData)
 
@@ -314,13 +350,20 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
         const worldX  = posData[i * 4 + 0] - params.worldSize / 2
         const worldZ  = posData[i * 4 + 1] - params.worldSize / 2
         const groundY = sampleTerrainHeight(worldX, worldZ)
+        const worldY  = groundY + 1.0
 
-        dummy.position.set(worldX, groundY + 1.0, worldZ)
+        // Store exact rendered position for accurate picking
+        worldPositions[i * 3 + 0] = worldX
+        worldPositions[i * 3 + 1] = worldY
+        worldPositions[i * 3 + 2] = worldZ
+
+        dummy.position.set(worldX, worldY, worldZ)
         dummy.updateMatrix()
 
         if (species < 0.5) preyMesh.setMatrixAt(preyCount++, dummy.matrix)
         else predatorMesh.setMatrixAt(predatorCount++, dummy.matrix)
       } else {
+        worldPositions[i * 3 + 1] = -99999  // mark dead
         slotManager.free(i)
       }
     }
@@ -329,6 +372,32 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
     predatorMesh.count = predatorCount
     preyMesh.instanceMatrix.needsUpdate     = true
     predatorMesh.instanceMatrix.needsUpdate = true
+  }
+
+  // ── Screen projection ─────────────────────────────────────────
+  // Called every frame from SceneManager AFTER render so camera matrices are final.
+  // Projects each live agent's world position to pixel coords and caches them.
+  const _projVec = new THREE.Vector3()
+  function updateScreenPositions(camera: THREE.Camera, viewW: number, viewH: number): void {
+    for (let i = 0; i < MAX_AGENTS; i++) {
+      const wy = worldPositions[i * 3 + 1]
+      if (wy < -9999) { screenPositions[i * 2] = -1; continue }
+
+      _projVec.set(worldPositions[i * 3 + 0], wy, worldPositions[i * 3 + 2])
+      _projVec.project(camera)
+
+      // After project(), z=1 means on far plane, z=-1 means on near plane
+      // z >= 1 means behind or on far plane — not visible
+      if (_projVec.z >= 1) { screenPositions[i * 2] = -1; continue }
+
+      // Also skip if outside NDC bounds (off screen)
+      if (_projVec.x < -1 || _projVec.x > 1 || _projVec.y < -1 || _projVec.y > 1) {
+        screenPositions[i * 2] = -1; continue
+      }
+
+      screenPositions[i * 2 + 0] = (_projVec.x + 1) / 2 * viewW
+      screenPositions[i * 2 + 1] = (-_projVec.y + 1) / 2 * viewH
+    }
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -368,6 +437,66 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
     },
 
     getNextFreeSlot() { return slotManager.allocate() },
+
+    getAgentData(slot: number): AgentData | null {
+      if (slot < 0 || slot >= MAX_AGENTS) return null
+      const bIdx  = slot * 4
+      const alive = lastMetaData[bIdx + 3]
+      if (alive < 0.5) return null
+
+      const weights   = new Float32Array(NN_PIXELS_PER_AGENT * 4)
+      const baseRow   = Math.floor(slot / TEX_SIZE) * NN_PIXELS_PER_AGENT
+      gl.bindFramebuffer(gl.FRAMEBUFFER, weightBuffer.framebuffers[weightBuffer.currentIndex])
+      for (let p = 0; p < NN_PIXELS_PER_AGENT; p++) {
+        const pixel = new Float32Array(4)
+        gl.readPixels(slot % TEX_SIZE, baseRow + p, 1, 1, gl.RGBA, gl.FLOAT, pixel)
+        weights.set(pixel, p * 4)
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+
+      const aIdx = slot * 4
+      return {
+        slot,
+        energy:  lastMetaData[bIdx + 0],
+        age:     lastMetaData[bIdx + 1],
+        species: lastMetaData[bIdx + 2] < 0.5 ? 'prey' : 'predator',
+        alive:   true,
+        posX:    lastPosData[aIdx + 0],
+        posY:    lastPosData[aIdx + 1],
+        velX:    lastPosData[aIdx + 2],
+        velY:    lastPosData[aIdx + 3],
+        weights,
+      }
+    },
+
+    updateScreenPositions(camera: THREE.Camera, viewW: number, viewH: number) {
+      updateScreenPositions(camera, viewW, viewH)
+    },
+
+    pickAgent(clickPxX: number, clickPxY: number): number {
+      const PICK_PX = 28
+      let bestSlot = -1
+      let bestDist = PICK_PX
+
+      let validCount = 0
+      for (let i = 0; i < MAX_AGENTS; i++) {
+        const sx = screenPositions[i * 2]
+        if (sx >= 0) validCount++
+      }
+      console.log('[pick] click:', Math.round(clickPxX), Math.round(clickPxY), '| valid screen positions:', validCount)
+
+      for (let i = 0; i < MAX_AGENTS; i++) {
+        const sx = screenPositions[i * 2]
+        if (sx < 0) continue
+        const sy  = screenPositions[i * 2 + 1]
+        const dx  = sx - clickPxX
+        const dy  = sy - clickPxY
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        if (dist < bestDist) { bestDist = dist; bestSlot = i }
+      }
+      console.log('[pick] bestSlot:', bestSlot, 'bestDist:', bestDist.toFixed(1))
+      return bestSlot
+    },
 
     dispose() {
       destroyPingPongBuffer(gl, stateBufferA)
@@ -410,6 +539,18 @@ export function updateAgents(dt: number): void { engine?.update(dt) }
 
 export function getAgentStats() {
   return engine?.getStats() ?? { alive: 0, prey: 0, predator: 0, free: 0, avgEnergy: 0, avgAge: 0 }
+}
+
+export function getAgentData(slot: number) {
+  return engine?.getAgentData(slot) ?? null
+}
+
+export function updateScreenPositions(camera: THREE.Camera, viewW: number, viewH: number) {
+  engine?.updateScreenPositions(camera, viewW, viewH)
+}
+
+export function pickAgent(clickPxX: number, clickPxY: number) {
+  return engine?.pickAgent(clickPxX, clickPxY) ?? -1
 }
 
 export function disposeAgents(): void {
