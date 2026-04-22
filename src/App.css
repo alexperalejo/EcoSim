@@ -669,3 +669,55 @@ html, body, #root {
   transition: opacity 0.15s;
 }
 .modal-link:hover { opacity: 0.75; }
+/* ── ES-75: Preset environment selector ─────────────────────────── */
+.preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.btn-preset {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 5px;
+  padding: 5px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  text-align: center;
+}
+
+.btn-preset:hover {
+  background: var(--surface3, #2a2a3a);
+  color: var(--text);
+  border-color: var(--accent2);
+}
+
+.btn-preset-active {
+  background: var(--accent2);
+  color: #000;
+  border-color: var(--accent2);
+}
+
+/* ── ES-84: Disease stats panel ─────────────────────────────────── */
+.disease-stats {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.disease-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.disease-row span:first-child {
+  color: var(--text-muted);
+}

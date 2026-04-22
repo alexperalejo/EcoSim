@@ -531,6 +531,13 @@ export function createAgents(): THREE.Object3D {
     console.info('[EcoSim] Benchmark ready → await window.__ecoBenchmark.run()')
   })
 
+  // ES-69: Expose neuroevolution API in dev console: window.__ecoNeuro
+  import('./neuroevolution').then(({ ecoNeuro, getProtoModel }) => {
+    ;(window as any).__ecoNeuro = ecoNeuro
+    getProtoModel() // eagerly build + log model summary
+    console.info('[EcoSim] Neuroevolution ready → window.__ecoNeuro')
+  })
+
   return engine.getSceneObject()
 }
 
