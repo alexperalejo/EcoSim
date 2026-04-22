@@ -10,6 +10,10 @@ const SEQ_LEN   = 30
 const POP_MAX   = 200.0
 const MODEL_URL = '/lstm-model/model.json'
 
+// T-4.3.1 — Stability thresholds (exported so UI reference lines stay in sync)
+export const STABILITY_THRESHOLD_CRITICAL = 0.3   // score < 0.3 → critical
+export const STABILITY_THRESHOLD_WARNING  = 0.5   // score < 0.5 → warning
+
 let model: tf.LayersModel | null = null
 let loadError = false
 
@@ -57,7 +61,8 @@ function buildAlert(
   avgEnergy: number,
 ): { alert: string; alertLevel: StabilityResult['alertLevel'] } {
 
-  if (score >= 0.7) return { alert: '', alertLevel: 'none' }
+  // T-4.3.1 thresholds: < 0.3 critical, < 0.5 warning
+  if (score >= STABILITY_THRESHOLD_WARNING) return { alert: '', alertLevel: 'none' }
 
   const ratio = predator > 0 ? prey / predator : Infinity
 
@@ -65,7 +70,7 @@ function buildAlert(
     return { alert: 'Predator extinction — prey population unchecked', alertLevel: 'critical' }
   if (prey === 0)
     return { alert: 'Prey extinct — predators will starve within ~30 ticks', alertLevel: 'critical' }
-  if (score < 0.2)
+  if (score < STABILITY_THRESHOLD_CRITICAL)
     return { alert: 'Ecosystem collapse imminent — intervention needed', alertLevel: 'critical' }
   if (ratio < 1.5)
     return { alert: `Predator surge — prey outnumbered ${predator}:${prey}, crash likely`, alertLevel: 'warn' }
