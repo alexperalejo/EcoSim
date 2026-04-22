@@ -13,6 +13,9 @@ import {
   ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts'
 import { SceneManager } from './scene/SceneManager'
+import { PRESETS, getPreset, DEFAULT_PRESET_ID } from './simulation/presets'
+import { diseaseSimulation, DEFAULT_DISEASE_PARAMS } from './simulation/diseaseSimulation'
+import type { DiseaseState, DiseaseParams } from './simulation/diseaseSimulation'
 import { getAgentStats, getAgentData, checkImbalance, STABILITY_THRESHOLD_CRITICAL, STABILITY_THRESHOLD_WARNING } from './simulation'
 import type { AgentData } from './simulation/simulationEngine'
 import type { ImbalanceEvent } from './simulation/imbalanceDetector'
@@ -313,6 +316,10 @@ export default function App() {
 
   const [running,       setRunning]       = useState(true)
   const [controls,      setControls]      = useState<SimControls>(DEFAULT_CONTROLS)
+  const [activePreset,  setActivePreset]  = useState<string>(DEFAULT_PRESET_ID)
+  const [diseaseState,  setDiseaseState]  = useState<DiseaseState | null>(null)
+  const [diseaseParams, setDiseaseParams] = useState<DiseaseParams>(DEFAULT_DISEASE_PARAMS)
+  const [showDisease,   setShowDisease]   = useState(false)
   const [showCharts,    setShowCharts]    = useState(false)
   const [showInfo,      setShowInfo]      = useState(false)
   const [selectedSlot,  setSelectedSlot]  = useState<number | null>(null)
@@ -387,6 +394,12 @@ export default function App() {
             const evt = checkImbalance(s.prey, s.predator, dayCount)
             if (evt) setImbalance(evt)
 
+            // ES-84: advance disease simulation
+            if (diseaseSimulation.isActive) {
+              const ds = diseaseSimulation.update(s.alive)
+              setDiseaseState({ ...ds })
+            }
+
             const next = [
               ...prev,
               { t: dayCount, prey: s.prey, predator: s.predator, alive: s.alive, stability: result.score },
@@ -425,6 +438,39 @@ export default function App() {
     setPopHistory([])
     setSelectedSlot(null)
     setStats(prev => ({ ...prev, frame: 0, generation: 0, dayCount: 1, timeOfDay: '12:00 PM' }))
+  }, [])
+
+  // ES-75: Apply environment preset
+  const handlePreset = useCallback((id: string) => {
+    const preset = getPreset(id)
+    setActivePreset(id)
+    if (managerRef.current) {
+      managerRef.current.applyPreset(preset)
+    }
+    // Sync sliders to preset params
+    setControls(prev => ({
+      ...prev,
+      moveSpeed:        preset.params.moveSpeed        ?? prev.moveSpeed,
+      foodEnergyGain:   preset.params.foodEnergyGain   ?? prev.foodEnergyGain,
+      moveEnergyCost:   preset.params.moveEnergyCost   ?? prev.moveEnergyCost,
+      foodDetectRadius: preset.params.foodDetectRadius ?? prev.foodDetectRadius,
+      mutationRate:     preset.params.mutationRate     ?? prev.mutationRate,
+      mutationStrength: preset.params.mutationStrength ?? prev.mutationStrength,
+    }))
+  }, [])
+
+  // ES-84: Disease controls
+  const handleDiseaseStart = useCallback(() => {
+    const s = getAgentStats()
+    diseaseSimulation.updateParams(diseaseParams)
+    diseaseSimulation.seed(s.alive)
+    setShowDisease(true)
+  }, [diseaseParams])
+
+  const handleDiseaseStop = useCallback(() => {
+    diseaseSimulation.stop()
+    setDiseaseState(null)
+    setShowDisease(false)
   }, [])
 
   // Slider → engine params
@@ -535,6 +581,44 @@ export default function App() {
           <Slider label="Detect Radius" value={controls.foodDetectRadius}
             min={2} max={30} step={1}
             onChange={v => updateControl('foodDetectRadius', v)} />
+        </section>
+
+        <section className="sidebar-section">
+          <div className="section-label">ENVIRONMENT</div>
+          <div className="preset-grid">
+            {PRESETS.map(p => (
+              <button
+                key={p.id}
+                className={`btn-preset ${activePreset === p.id ? 'btn-preset-active' : ''}`}
+                onClick={() => handlePreset(p.id)}
+                title={p.description}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="sidebar-section">
+          <div className="section-label">DISEASE</div>
+          {!diseaseSimulation.isActive ? (
+            <button className="btn-secondary" onClick={handleDiseaseStart}>
+              ☣ Seed Disease
+            </button>
+          ) : (
+            <button className="btn-secondary" style={{ color: 'var(--red)' }} onClick={handleDiseaseStop}>
+              ✕ Stop Disease
+            </button>
+          )}
+          {diseaseState && (
+            <div className="disease-stats">
+              <div className="disease-row"><span>Susceptible</span><span style={{color:'#aaa'}}>{Math.round(diseaseState.S)}</span></div>
+              <div className="disease-row"><span>Exposed</span><span style={{color:'#ffcc00'}}>{Math.round(diseaseState.E)}</span></div>
+              <div className="disease-row"><span>Infected</span><span style={{color:'var(--red)'}}>{Math.round(diseaseState.I)}</span></div>
+              <div className="disease-row"><span>Recovered</span><span style={{color:'#00e5a0'}}>{Math.round(diseaseState.R)}</span></div>
+              <div className="disease-row"><span>Deaths</span><span style={{color:'#666'}}>{Math.round(diseaseState.D)}</span></div>
+            </div>
+          )}
         </section>
 
         <section className="sidebar-section">

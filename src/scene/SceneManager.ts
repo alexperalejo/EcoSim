@@ -5,6 +5,7 @@ import { createCamera } from './createCamera'
 import { createControls } from './createControls'
 import { createLights } from './createLights'
 import { createTerrain } from '../rendering/terrain'
+import type { EnvironmentPreset } from '../simulation/presets'
 import { createAgents, updateAgents, disposeAgents, pickAgent, updateScreenPositions } from '../simulation'
 import { updateDayNight } from './dayNight'
 import type { SceneLights } from './createLights'
@@ -23,6 +24,7 @@ export class SceneManager {
   private _onMove:   (e: MouseEvent) => void
   private lights:    SceneLights
   private _hoverThrottle = 0
+  private _terrain:   THREE.Mesh | null = null
 
   public params:       SimParams | null = null
   public simSpeed:     number = 1.0
@@ -44,8 +46,8 @@ export class SceneManager {
     this.controls = createControls(this.camera, this.renderer.domElement)
     this.lights   = createLights(this.scene)
 
-    const terrain = createTerrain({ size: 256, segments: 128, maxHeight: 30 })
-    this.scene.add(terrain)
+    this._terrain = createTerrain({ size: 256, segments: 128, maxHeight: 30 })
+    this.scene.add(this._terrain)
     this.scene.add(new THREE.AxesHelper(10))
 
     const agentObj = createAgents()
@@ -84,6 +86,27 @@ export class SceneManager {
     this.mountEl.addEventListener('mousemove', this._onMove)
 
     this.resize()
+  }
+
+  /** ES-75: Swap terrain + sim params for a preset environment */
+  applyPreset(preset: EnvironmentPreset): void {
+    // Swap terrain
+    if (this._terrain) {
+      this.scene.remove(this._terrain)
+      this._terrain.geometry.dispose()
+      ;(this._terrain.material as THREE.Material).dispose()
+    }
+    this._terrain = createTerrain(preset.terrain)
+    this.scene.add(this._terrain)
+
+    // Update sky + fog
+    this.scene.background = new THREE.Color(preset.skyColor)
+    this.scene.fog = new THREE.Fog(preset.fogColor, preset.fogNear, preset.fogFar)
+
+    // Push sim params into engine
+    if (this.params) {
+      Object.assign(this.params, preset.params)
+    }
   }
 
   start() {
