@@ -103,9 +103,13 @@ export class SceneManager {
     this.scene.background = new THREE.Color(preset.skyColor)
     this.scene.fog = new THREE.Fog(preset.fogColor, preset.fogNear, preset.fogFar)
 
-    // Push sim params into engine
-    if (this.params) {
-      Object.assign(this.params, preset.params)
+    // Push sim params into engine — read from window.__ecoEngine in case
+    // this.params was null at construction time (assigned after createAgents)
+    const w = window as unknown as { __ecoEngine?: { params: Record<string, number> } }
+    const engineParams = w.__ecoEngine?.params ?? this.params
+    if (engineParams) {
+      Object.assign(engineParams, preset.params)
+      this.params = engineParams as typeof this.params
     }
   }
 

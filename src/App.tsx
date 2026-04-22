@@ -344,6 +344,8 @@ export default function App() {
     managerRef.current = manager
     manager.onAgentClick = (slot) => setSelectedSlot(slot)
     manager.start()
+    // ES-75: apply default preset on load so sky/terrain/params are consistent
+    manager.applyPreset(getPreset(DEFAULT_PRESET_ID))
     return () => { manager.dispose(); managerRef.current = null }
   }, [])
 
