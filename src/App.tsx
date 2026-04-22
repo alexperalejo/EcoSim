@@ -13,8 +13,9 @@ import {
   ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts'
 import { SceneManager } from './scene/SceneManager'
-import { getAgentStats, getAgentData } from './simulation'
+import { getAgentStats, getAgentData, checkImbalance, STABILITY_THRESHOLD_CRITICAL, STABILITY_THRESHOLD_WARNING } from './simulation'
 import type { AgentData } from './simulation/simulationEngine'
+import type { ImbalanceEvent } from './simulation/imbalanceDetector'
 import { computeStability } from './simulation/lstmForecaster'
 import type { StabilityResult } from './simulation/stabilityScore'
 import './App.css'
@@ -316,6 +317,10 @@ export default function App() {
   const [showInfo,      setShowInfo]      = useState(false)
   const [selectedSlot,  setSelectedSlot]  = useState<number | null>(null)
   const [popHistory,    setPopHistory]    = useState<PopSnapshot[]>([])
+  // T-4.4.1: full-session stability score log (unbounded)
+  const stabilityScoreLog = useRef<{ tick: number; score: number }[]>([])
+  // ES-34: latest imbalance event
+  const [imbalance, setImbalance] = useState<ImbalanceEvent | null>(null)
   const [stability,  setStability]  = useState<StabilityResult>({
     score: 0.5, label: 'Stable', alert: '', alertLevel: 'none',
   })
@@ -374,6 +379,13 @@ export default function App() {
             // ES-74/32: compute stability from history so far
             const result = computeStability(s.prey, s.predator, s.avgEnergy, prev)
             setStability(result)
+
+            // T-4.4.1: append to full-session score log
+            stabilityScoreLog.current.push({ tick: dayCount, score: result.score })
+
+            // ES-34 T-4.6.1/T-4.6.2: check for population imbalance every N ticks
+            const evt = checkImbalance(s.prey, s.predator, dayCount)
+            if (evt) setImbalance(evt)
 
             const next = [
               ...prev,
@@ -547,6 +559,18 @@ export default function App() {
           </div>
         )}
 
+        {/* ES-34: Population imbalance banner */}
+        {imbalance && (
+          <div className="alert-banner" style={{
+            borderColor: imbalance.alertLevel === 'critical' ? 'var(--red)' : 'var(--yellow)',
+            color:       imbalance.alertLevel === 'critical' ? 'var(--red)' : 'var(--yellow)',
+            marginTop: stability.alertLevel !== 'none' ? '4px' : undefined,
+          }}>
+            <span className="alert-icon">{imbalance.alertLevel === 'critical' ? '⚠' : '◆'}</span>
+            <span className="alert-text">{imbalance.label}</span>
+          </div>
+        )}
+
         <div className="viewport-wrapper">
           <div ref={mountRef} className="viewport" />
 
@@ -626,10 +650,9 @@ export default function App() {
                       tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
                     />
                     <Tooltip content={<StabilityTooltip />} />
-                    {/* Reference lines for stability thresholds */}
-                    <ReferenceLine y={0.75} stroke="#00e5a0" strokeDasharray="3 3" strokeOpacity={0.3} />
-                    <ReferenceLine y={0.40} stroke="#ff8800" strokeDasharray="3 3" strokeOpacity={0.3} />
-                    <ReferenceLine y={0.20} stroke="#ff4444" strokeDasharray="3 3" strokeOpacity={0.3} />
+                    {/* T-4.3.1: reference lines at spec-defined thresholds */}
+                    <ReferenceLine y={STABILITY_THRESHOLD_WARNING}  stroke="#ffcc00" strokeDasharray="3 3" strokeOpacity={0.4} label={{ value: 'warn', position: 'right', fontSize: 9, fill: '#ffcc00' }} />
+                    <ReferenceLine y={STABILITY_THRESHOLD_CRITICAL} stroke="#ff4444" strokeDasharray="3 3" strokeOpacity={0.4} label={{ value: 'crit', position: 'right', fontSize: 9, fill: '#ff4444' }} />
                     <Line type="monotone" dataKey="stability" name="Stability"
                       stroke="#00aaff" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                   </LineChart>

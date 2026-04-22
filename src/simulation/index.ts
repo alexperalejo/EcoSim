@@ -18,4 +18,6 @@ export {
 export { DEFAULT_PARAMS, TEX_SIZE, WORLD_SIZE } from './agentState';
 export type { SimParams } from './agentState';
 export { ecoBenchmark } from './benchmark';
-export type { BenchmarkResult } from './benchmark';
+export type { BenchmarkResult } from './benchmark';export { checkImbalance } from './imbalanceDetector';
+export type { ImbalanceEvent } from './imbalanceDetector';
+export { STABILITY_THRESHOLD_CRITICAL, STABILITY_THRESHOLD_WARNING } from './lstmForecaster';
