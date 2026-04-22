@@ -20,20 +20,20 @@ import * as THREE from 'three'
 const DAY_DURATION = 240.0  // seconds for one full day/night cycle
 
 // Key sky colours at each phase
-const SKY_NIGHT   = new THREE.Color(0x0a1628)  // near black-blue
-const SKY_SUNRISE = new THREE.Color(0xff6a2a)  // warm orange
-const SKY_DAY     = new THREE.Color(0x87ceeb)  // the original sky blue
-const SKY_SUNSET  = new THREE.Color(0xff4500)  // deep red-orange
+const SKY_NIGHT   = new THREE.Color(0x0d1b2a)  // deep navy blue
+const SKY_SUNRISE = new THREE.Color(0xfdb97d)  // soft peach
+const SKY_DAY     = new THREE.Color(0x87ceeb)  // sky blue (unchanged)
+const SKY_SUNSET  = new THREE.Color(0xf4845f)  // soft coral/salmon
 
 // Sun light colours
-const SUN_DAY     = new THREE.Color(0xfff4e0)  // warm white (original)
-const SUN_SUNRISE = new THREE.Color(0xff9944)  // orange
-const SUN_SUNSET  = new THREE.Color(0xff5522)  // deep orange-red
-const SUN_NIGHT   = new THREE.Color(0x101828)  // near black
+const SUN_DAY     = new THREE.Color(0xfff4e0)  // warm white (unchanged)
+const SUN_SUNRISE = new THREE.Color(0xffd4a3)  // warm peach
+const SUN_SUNSET  = new THREE.Color(0xffb347)  // soft amber
+const SUN_NIGHT   = new THREE.Color(0x1a2744)  // dark blue
 
 // Ambient intensities
-const AMBIENT_DAY   = 0.8
-const AMBIENT_NIGHT = 0.45  // Never fully dark to keep some visibility at night (moonlight)
+const AMBIENT_DAY   = 0.9
+const AMBIENT_NIGHT = 0.5   // Never fully dark to keep some visibility at night (moonlight)
 
 // Sun orbit radius
 const SUN_RADIUS = 140.0
@@ -81,9 +81,9 @@ export function updateDayNight(
   )
 
   // ── Sun intensity ────────────────────────────────────────────────
-  // Dim when below horizon (sin(angle) < 0)
+  // Ramps up from a 0.4 floor at night to 2.2 at noon — always visible
   const sunHeight = Math.sin(angle)          // -1 (midnight) → 1 (noon)
-  const sunIntensity = Math.max(sunHeight, 0.0) * 1.2
+  const sunIntensity = Math.max(sunHeight, 0.0) * 1.8 + 0.4
   sun.intensity = sunIntensity
 
   // ── Sun colour ──────────────────────────────────────────────────

@@ -30,10 +30,11 @@ export const PRESETS: EnvironmentPreset[] = [
     label:       'Savanna',
     description: 'Flat, sun-scorched plains — food is sparse, energy costly, herds move fast.',
     terrain: {
-      size:       256,
-      segments:   128,
-      maxHeight:  8,      // nearly flat
-      noiseScale: 0.004,  // broad, gentle features
+      size:        256,
+      segments:    128,
+      maxHeight:   8,      // nearly flat
+      noiseScale:  0.004,  // broad, gentle features
+      colorScheme: 'savanna',
     },
     params: {
       foodEnergyGain:   12.0,   // scarce food
@@ -53,10 +54,11 @@ export const PRESETS: EnvironmentPreset[] = [
     label:       'Rainforest',
     description: 'Dense canopy, rich food, high hills — slow movers thrive, predators lurk close.',
     terrain: {
-      size:       256,
-      segments:   128,
-      maxHeight:  45,     // steep ridges
-      noiseScale: 0.012,  // tight, varied
+      size:        256,
+      segments:    128,
+      maxHeight:   45,     // steep ridges
+      noiseScale:  0.012,  // tight, varied
+      colorScheme: 'rainforest',
     },
     params: {
       foodEnergyGain:   32.0,   // abundant
@@ -76,10 +78,11 @@ export const PRESETS: EnvironmentPreset[] = [
     label:       'Island',
     description: 'Isolated landmass surrounded by sea — limited space, boom-bust cycles.',
     terrain: {
-      size:       256,
-      segments:   128,
-      maxHeight:  35,
-      noiseScale: 0.014,  // sharp central peak, water edges
+      size:        256,
+      segments:    128,
+      maxHeight:   35,
+      noiseScale:  0.014,  // sharp central peak, water edges
+      colorScheme: 'island',
     },
     params: {
       foodEnergyGain:   22.0,
@@ -99,10 +102,11 @@ export const PRESETS: EnvironmentPreset[] = [
     label:       'Tundra',
     description: 'Frozen flatlands — very sparse food, high energy cost, only the fit survive.',
     terrain: {
-      size:       256,
-      segments:   128,
-      maxHeight:  12,
-      noiseScale: 0.003,  // very flat, windswept
+      size:        256,
+      segments:    128,
+      maxHeight:   2,
+      noiseScale:  0.003,  // very flat, windswept
+      colorScheme: 'tundra',
     },
     params: {
       foodEnergyGain:   8.0,    // near-barren

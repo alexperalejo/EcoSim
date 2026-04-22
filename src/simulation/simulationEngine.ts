@@ -150,14 +150,18 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
   const params      = { ...DEFAULT_PARAMS }
   let   elapsedTime = 0
 
-  const agentGeometry    = new THREE.SphereGeometry(0.5, 8, 6)
-  agentGeometry.computeBoundingSphere()
-  agentGeometry.computeBoundingBox()
-  const preyMaterial     = new THREE.MeshLambertMaterial({ color: 0x44dd88 })
-  const predatorMaterial = new THREE.MeshLambertMaterial({ color: 0xff4444 })
+  const preyGeometry = new THREE.SphereGeometry(0.5, 8, 6)
+  preyGeometry.computeBoundingSphere()
+  preyGeometry.computeBoundingBox()
+  const predatorGeometry = new THREE.SphereGeometry(0.7, 8, 6)
+  predatorGeometry.computeBoundingSphere()
+  predatorGeometry.computeBoundingBox()
 
-  const preyMesh     = new THREE.InstancedMesh(agentGeometry, preyMaterial,     MAX_AGENTS)
-  const predatorMesh = new THREE.InstancedMesh(agentGeometry, predatorMaterial, MAX_AGENTS)
+  const preyMaterial     = new THREE.MeshLambertMaterial({ color: 0x00ffff })
+  const predatorMaterial = new THREE.MeshLambertMaterial({ color: 0xff00ff })
+
+  const preyMesh     = new THREE.InstancedMesh(preyGeometry,     preyMaterial,     MAX_AGENTS)
+  const predatorMesh = new THREE.InstancedMesh(predatorGeometry, predatorMaterial, MAX_AGENTS)
   preyMesh.frustumCulled     = false
   predatorMesh.frustumCulled = false
   preyMesh.count     = 0
@@ -507,7 +511,8 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
       gl.deleteProgram(foodProgram)
       gl.deleteVertexArray(vao)
       gl.deleteFramebuffer(mrtFramebuffer)
-      agentGeometry.dispose()
+      preyGeometry.dispose()
+      predatorGeometry.dispose()
       preyMaterial.dispose()
       predatorMaterial.dispose()
       preyMesh.dispose()

@@ -13,6 +13,8 @@
   --accent2:   #00aaff;
   --red:       #ff4444;
   --green:     #44dd88;
+  --cyan:      #00ffff;
+  --magenta:   #ff00ff;
   --yellow:    #ffcc00;
   --text:      #d8e6f0;
   --muted:     #4a6a80;
@@ -455,7 +457,7 @@ html, body, #root {
 /* ── Agent Inspector ── */
 .agent-inspector {
   position: absolute;
-  top: 16px;
+  top: 80px;
   right: 16px;
   width: 220px;
   background: rgba(9, 13, 18, 0.92);

@@ -116,18 +116,16 @@ function StatBadge({ label, value, color }: { label: string; value: string | num
 
 // ── Time helper ───────────────────────────────────────────────────────
 
-function calcDayTime(frameCount: number, fps = 60): { dayCount: number; timeOfDay: string } {
-  const totalSeconds = frameCount / fps
-  const dayCount     = Math.floor(totalSeconds / DAY_DURATION_SECONDS) + 1
-  const timeInDay    = (totalSeconds % DAY_DURATION_SECONDS) / DAY_DURATION_SECONDS
 
+function calcDayTime(elapsedSeconds: number): { dayCount: number; timeOfDay: string } {
+  const dayCount  = Math.floor(elapsedSeconds / DAY_DURATION_SECONDS) + 1
+  const timeInDay = (elapsedSeconds % DAY_DURATION_SECONDS) / DAY_DURATION_SECONDS
   const totalHours = timeInDay * 24
   const hour       = Math.floor(totalHours)
   const minute     = Math.floor((totalHours - hour) * 60)
   const ampm       = hour >= 12 ? 'PM' : 'AM'
   const hour12     = hour % 12 || 12
   const timeOfDay  = `${hour12}:${minute.toString().padStart(2, '0')} ${ampm}`
-
   return { dayCount, timeOfDay }
 }
 
@@ -236,7 +234,7 @@ function AgentInspector({ slot, onClose }: { slot: number; onClose: () => void }
   const energyPct    = Math.round(data.energy)
   const speedMag     = Math.sqrt(data.velX ** 2 + data.velY ** 2)
   const isPrey       = data.species === 'prey'
-  const speciesColor = isPrey ? '#44dd88' : '#ff4444'
+  const speciesColor = isPrey ? '#00ffff' : '#ff00ff'
   return (
     <div className="agent-inspector">
       <div className="inspector-header">
@@ -313,6 +311,9 @@ export default function App() {
   const fpsCountRef = useRef(0)
   const fpsTimerRef = useRef(0)
   const popTimerRef = useRef(0)
+  const simSpeedRef = useRef(DEFAULT_CONTROLS.simSpeed)
+  const elapsedSimSecondsRef = useRef(0)
+  const lastTimestampRef = useRef(0)
 
   const [running,       setRunning]       = useState(true)
   const [controls,      setControls]      = useState<SimControls>(DEFAULT_CONTROLS)
@@ -356,6 +357,12 @@ export default function App() {
       frameRef.current++
       fpsCountRef.current++
 
+        if (lastTimestampRef.current > 0) {
+          const delta = (now - lastTimestampRef.current) / 1000
+          elapsedSimSecondsRef.current += delta * simSpeedRef.current
+        }
+        lastTimestampRef.current = now
+
       if (now - fpsTimerRef.current >= 1000) {
         const elapsed = now - fpsTimerRef.current
         const fps     = Math.round(fpsCountRef.current * 1000 / elapsed)
@@ -363,7 +370,7 @@ export default function App() {
         fpsTimerRef.current = now
 
         const s = getAgentStats()
-        const { dayCount, timeOfDay } = calcDayTime(frameRef.current, fps || 60)
+        const { dayCount, timeOfDay } = calcDayTime(frameRef.current, simSpeedRef.current, fps || 60)
 
         setStats(prev => ({
           ...prev,
@@ -430,6 +437,8 @@ export default function App() {
     if (!managerRef.current || !mountRef.current) return
     managerRef.current.dispose()
     const m = new SceneManager(mountRef.current)
+    elapsedSimSecondsRef.current = 0  // ← added***********
+    lastTimestampRef.current     = 0  // ← added***********
     managerRef.current = m
     m.onAgentClick = (slot) => setSelectedSlot(slot)
     m.start()
@@ -475,19 +484,20 @@ export default function App() {
 
   // Slider → engine params
   const updateControl = useCallback((key: keyof SimControls, value: number) => {
-    setControls(prev => {
-      const next    = { ...prev, [key]: value }
-      const manager = managerRef.current
-      if (!manager) return next
+    if (key === 'simSpeed') simSpeedRef.current = value // keep ref in sync for time calculations
+      setControls(prev => {
+        const next    = { ...prev, [key]: value }
+        const manager = managerRef.current
+        if (!manager) return next
 
-      if (key === 'simSpeed') {
-        manager.simSpeed = value
-      } else if (manager.params) {
-        (manager.params as Record<string, number>)[key] = value
-      }
-      return next
-    })
-  }, [])
+        if (key === 'simSpeed') {
+          manager.simSpeed = value
+        } else if (manager.params) {
+          (manager.params as Record<string, number>)[key] = value
+        }
+        return next
+      })
+    }, [])
 
   const alertColor = stability.alertLevel === 'critical' ? 'var(--red)'
                    : stability.alertLevel === 'warn'     ? 'var(--yellow)'
@@ -712,9 +722,9 @@ export default function App() {
                     <Tooltip content={<PopTooltip />} />
                     <Legend wrapperStyle={{ fontSize: 9, fontFamily: 'DM Mono', color: '#4a6a80', paddingTop: 4 }} />
                     <Line type="monotone" dataKey="prey"     name="Prey"
-                      stroke="#44dd88" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                      stroke="#00ffff" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                     <Line type="monotone" dataKey="predator" name="Predators"
-                      stroke="#ff4444" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                      stroke="#ff00ff" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -751,8 +761,8 @@ export default function App() {
         <div className="stats-bar">
           <StatBadge label="ALIVE"      value={stats.alive} />
           <div className="stats-sep" />
-          <StatBadge label="PREY"       value={stats.prey}     color="#44dd88" />
-          <StatBadge label="PREDATORS"  value={stats.predator} color="#ff4444" />
+          <StatBadge label="PREY"       value={stats.prey}     color="#00ffff" />
+          <StatBadge label="PREDATORS"  value={stats.predator} color="#ff00ff" />
           <div className="stats-sep" />
           <StatBadge label="AVG ENERGY" value={`${stats.avgEnergy}%`} />
           <StatBadge label="AVG AGE"    value={Math.round(stats.avgAge)} />
