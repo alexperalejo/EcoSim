@@ -1,10 +1,15 @@
 /**
  * ES-65: Implement organism.ts scaling layer
+ * ES-82: Inject synthetic antibodies intervention
  *
  * Manages a population of Animal instances.
  * Handles disease spread using the SIRSVIDE model,
  * population-level immunity tracking, migration and
  * density effects, and zoonotic transmission between species.
+ *
+ * ES-82 additions:
+ *   injectAntibodies() — boosts infected agent immunity by 0.3,
+ *   suppresses transmission rate by 50% for 30 ticks.
  */
 
 import { Animal } from './animal'
@@ -30,6 +35,8 @@ export interface OrganismRecord {
 
 export class OrganismLayer {
   private population: OrganismRecord[] = []
+  private transmissionModifier: number = 1.0
+  private suppressionTicksRemaining: number = 0
 
   addAnimal(animal: Animal): void {
     this.population.push({
@@ -51,6 +58,14 @@ export class OrganismLayer {
       this.updateState(record, dt, strain)
     }
     this.spreadDisease(strain)
+
+    // Decrement antibody suppression timer
+    if (this.suppressionTicksRemaining > 0) {
+      this.suppressionTicksRemaining--
+      if (this.suppressionTicksRemaining <= 0) {
+        this.transmissionModifier = 1.0
+      }
+    }
   }
 
   private updateState(record: OrganismRecord, dt: number, strain: DiseaseStrain): void {
@@ -96,13 +111,27 @@ export class OrganismLayer {
 
     for (const source of infected) {
       for (const target of susceptible) {
-        const transmissionChance = strain.transmissionRate * (1 - target.animal.immunityLevel)
+        const transmissionChance = strain.transmissionRate * this.transmissionModifier * (1 - target.animal.immunityLevel)
         if (Math.random() < transmissionChance) {
           target.state = SIRSVIDEState.Exposed
           target.strain = mutateStrain(strain)
         }
       }
     }
+  }
+
+  /** ES-82: Inject synthetic antibodies into the simulation */
+  injectAntibodies(): void {
+    // Boost immunity of all currently infected agents by 0.3
+    for (const record of this.population) {
+      if (record.state === SIRSVIDEState.Infected) {
+        record.animal.immunityLevel = Math.min(1.0, record.animal.immunityLevel + 0.3)
+      }
+    }
+
+    // Reduce transmission rate by 50% for 30 ticks
+    this.transmissionModifier = 0.5
+    this.suppressionTicksRemaining = 30
   }
 
   getStats(): Record<SIRSVIDEState, number> {
