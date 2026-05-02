@@ -79,6 +79,26 @@ html, body, #root {
   gap: 2px;
 }
 
+.load-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 6px 8px;
+  outline: none;
+}
+
+.load-input:focus {
+  border-color: var(--accent);
+}
+
+.load-input::placeholder {
+  color: var(--muted);
+}
+
 .logo-eco {
   font-family: var(--font-display);
   font-weight: 800;

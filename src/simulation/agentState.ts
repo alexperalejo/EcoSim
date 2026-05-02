@@ -86,7 +86,7 @@ export const DEFAULT_PARAMS = {
   // ── ES-16: Reproduction ────────────────────────────────────────
   reproductionEnergyThreshold: 70.0,
   reproductionEnergyCost:      30.0,
-} as const;
+};
 
 export type SimParams = typeof DEFAULT_PARAMS;
 

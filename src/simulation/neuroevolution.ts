@@ -19,9 +19,7 @@ import {
   NN_HIDDEN,
   NN_OUTPUTS,
   NN_WEIGHT_FLOATS,
-  mutateWeights,
 } from './agentState'
-import type { SimParams } from './agentState'
 
 // ── Model factory ─────────────────────────────────────────────────────
 // Builds a tf.Sequential matching the architecture in movement.frag.glsl:

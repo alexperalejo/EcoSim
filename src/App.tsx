@@ -22,6 +22,7 @@ import type { ImbalanceEvent } from './simulation/imbalanceDetector'
 import { computeStability } from './simulation/lstmForecaster'
 import type { StabilityResult } from './simulation/stabilityScore'
 import './App.css'
+import { saveSimulation, loadSimulation, getShareURL, getSimIDFromURL } from './simulation/firebaseSync'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -288,7 +289,7 @@ function InfoModal({ onClose }: { onClose: () => void }) {
           <button className="inspector-close" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          <p>A GPU-accelerated 3D ecosystem simulator built for CSC 583. Agents evolve neural networks in real time via neuroevolution on the GPU.</p>
+          <p>A GPU-accelerated 3D ecosystem simulator built for COMP 583. Agents evolve neural networks in real time via neuroevolution on the GPU.</p>
           <div className="modal-section">TECH STACK</div>
           <p>React 19 · TypeScript · Three.js · WebGL2 compute shaders · TensorFlow.js · Recharts</p>
           <div className="modal-section">HOW IT WORKS</div>
@@ -315,16 +316,20 @@ export default function App() {
   const elapsedSimSecondsRef = useRef(0)
   const lastTimestampRef = useRef(0)
 
-  const [running,       setRunning]       = useState(true)
-  const [controls,      setControls]      = useState<SimControls>(DEFAULT_CONTROLS)
-  const [activePreset,  setActivePreset]  = useState<string>(DEFAULT_PRESET_ID)
-  const [diseaseState,  setDiseaseState]  = useState<DiseaseState | null>(null)
-  const [diseaseParams, setDiseaseParams] = useState<DiseaseParams>(DEFAULT_DISEASE_PARAMS)
-  const [showDisease,   setShowDisease]   = useState(false)
-  const [showCharts,    setShowCharts]    = useState(false)
-  const [showInfo,      setShowInfo]      = useState(false)
-  const [selectedSlot,  setSelectedSlot]  = useState<number | null>(null)
-  const [popHistory,    setPopHistory]    = useState<PopSnapshot[]>([])
+  const [running, setRunning] = useState(true)
+  const [controls, setControls] = useState<SimControls>(DEFAULT_CONTROLS)
+  const [activePreset, setActivePreset] = useState<string>(DEFAULT_PRESET_ID)
+  const [diseaseState, setDiseaseState] = useState<DiseaseState | null>(null)
+  const [diseaseParams] = useState<DiseaseParams>(DEFAULT_DISEASE_PARAMS)
+  const [showCharts, setShowCharts] = useState(false)
+  const [showInfo, setShowInfo] = useState(false)
+  const [selectedSlot, setSelectedSlot] = useState<number | null>(null)
+  const [popHistory, setPopHistory] = useState<PopSnapshot[]>([])
+  const [saveStatus, setSaveStatus] = useState<string>('')
+  const [loadId, setLoadId] = useState<string>('')
+  const [loadStatus, setLoadStatus] = useState<string>('')
+  const [shareURL, setShareURL] = useState<string>('')
+
   // T-4.4.1: full-session stability score log (unbounded)
   const stabilityScoreLog = useRef<{ tick: number; score: number }[]>([])
   // ES-34: latest imbalance event
@@ -345,6 +350,19 @@ export default function App() {
     managerRef.current = manager
     manager.onAgentClick = (slot) => setSelectedSlot(slot)
     manager.start()
+
+    // ES-72: Auto-load shared simulation from URL
+    const sharedId = getSimIDFromURL()
+    if (sharedId) {
+      loadSimulation(sharedId).then(snapshot => {
+        if (snapshot?.params) {
+          Object.entries(snapshot.params).forEach(([key, value]) => {
+            updateControl(key as keyof typeof controls, value as number)
+          })
+        }
+      })
+    }
+
     return () => { manager.dispose(); managerRef.current = null }
   }, [])
 
@@ -370,7 +388,7 @@ export default function App() {
         fpsTimerRef.current = now
 
         const s = getAgentStats()
-        const { dayCount, timeOfDay } = calcDayTime(frameRef.current, simSpeedRef.current, fps || 60)
+        const { dayCount, timeOfDay } = calcDayTime(elapsedSimSecondsRef.current)
 
         setStats(prev => ({
           ...prev,
@@ -468,20 +486,6 @@ export default function App() {
     }))
   }, [])
 
-  // ES-84: Disease controls
-  const handleDiseaseStart = useCallback(() => {
-    const s = getAgentStats()
-    diseaseSimulation.updateParams(diseaseParams)
-    diseaseSimulation.seed(s.alive)
-    setShowDisease(true)
-  }, [diseaseParams])
-
-  const handleDiseaseStop = useCallback(() => {
-    diseaseSimulation.stop()
-    setDiseaseState(null)
-    setShowDisease(false)
-  }, [])
-
   // Slider → engine params
   const updateControl = useCallback((key: keyof SimControls, value: number) => {
     if (key === 'simSpeed') simSpeedRef.current = value // keep ref in sync for time calculations
@@ -499,6 +503,67 @@ export default function App() {
       })
     }, [])
 
+  // ES-84: Disease controls
+  const handleDiseaseStart = useCallback(() => {
+    const s = getAgentStats()
+    diseaseSimulation.updateParams(diseaseParams)
+    diseaseSimulation.seed(s.alive)
+  }, [diseaseParams])
+
+  const handleDiseaseStop = useCallback(() => {
+    diseaseSimulation.stop()
+    setDiseaseState(null)
+  }, [])
+
+  // ES-71: Save simulation
+  const handleSave = useCallback(async () => {
+    setSaveStatus('Saving...')
+    try {
+      const s = getAgentStats()
+      const id = await saveSimulation(
+        controls as unknown as Record<string, number>,
+        s.alive,
+        stats.generation,
+        `EcoSim — Day ${stats.dayCount}`,
+        activePreset
+      )
+      const url = getShareURL(id)
+      setShareURL(url)
+      setSaveStatus('Saved!')
+      setTimeout(() => setSaveStatus(''), 3000)
+    } catch (e) {
+      setSaveStatus('Error saving')
+      console.error(e)
+    }
+  }, [controls, stats, activePreset])
+
+  // ES-72: Load simulation by ID
+  const handleLoad = useCallback(async () => {
+    if (!loadId.trim()) return
+    setLoadStatus('Loading...')
+    try {
+      const snapshot = await loadSimulation(loadId.trim())
+      if (!snapshot) { setLoadStatus('Not found'); return }
+      if (snapshot.params) {
+        Object.entries(snapshot.params).forEach(([key, value]) => {
+          updateControl(key as keyof typeof controls, value as number)
+        })
+      }
+      setLoadStatus(`Loaded: ${snapshot.name}`)
+      setTimeout(() => setLoadStatus(''), 3000)
+    } catch (e) {
+      setLoadStatus('Error loading')
+      console.error(e)
+    }
+  }, [loadId, updateControl])
+
+  // ES-72: Copy share URL
+  const handleCopyURL = useCallback(() => {
+    if (!shareURL) return
+    navigator.clipboard.writeText(shareURL)
+    setSaveStatus('URL copied!')
+    setTimeout(() => setSaveStatus(''), 2000)
+  }, [shareURL])
   const alertColor = stability.alertLevel === 'critical' ? 'var(--red)'
                    : stability.alertLevel === 'warn'     ? 'var(--yellow)'
                    : 'transparent'
@@ -510,7 +575,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="sidebar-logo">
           <span className="logo-eco">Eco</span><span className="logo-sim">Sim</span>
-          <span className="logo-tag">CSC 583</span>
+          <span className="logo-tag">COMP 583</span>
         </div>
 
         <section className="sidebar-section">
@@ -627,6 +692,65 @@ export default function App() {
               <div className="disease-row"><span>Infected</span><span style={{color:'var(--red)'}}>{Math.round(diseaseState.I)}</span></div>
               <div className="disease-row"><span>Recovered</span><span style={{color:'#00e5a0'}}>{Math.round(diseaseState.R)}</span></div>
               <div className="disease-row"><span>Deaths</span><span style={{color:'#666'}}>{Math.round(diseaseState.D)}</span></div>
+            </div>
+          )}
+        </section>
+
+        {/* ES-71 / ES-72: Save / Load / Share */}
+        <section className="sidebar-section">
+          <div className="section-label">SAVE / LOAD</div>
+
+          {/* Save button */}
+          <button className="btn-secondary" onClick={handleSave}
+            style={{ width: '100%', marginBottom: 8 }}>
+             Save Simulation
+          </button>
+
+          {/* Save status */}
+          {saveStatus && (
+            <div style={{ fontSize: 10, color: 'var(--accent)', marginBottom: 6 }}>
+              {saveStatus}
+            </div>
+          )}
+
+          {/* Share URL */}
+          {shareURL && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}>
+                SHARE URL
+              </div>
+              <div style={{
+                fontSize: 8, color: 'var(--accent2)', wordBreak: 'break-all',
+                background: 'var(--surface2)', padding: '4px 6px',
+                borderRadius: 3, marginBottom: 4,
+              }}>
+                {shareURL}
+              </div>
+              <button className="btn-secondary" onClick={handleCopyURL}
+                style={{ width: '100%', fontSize: 10 }}>
+                Copy URL
+              </button>
+            </div>
+          )}
+
+          {/* Load by ID */}
+          <div style={{ fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}>
+            LOAD BY ID
+          </div>
+          <input
+            type="text"
+            placeholder="Paste simulation ID..."
+            value={loadId}
+            onChange={e => setLoadId(e.target.value)}
+            className="load-input"
+          />
+          <button className="btn-secondary" onClick={handleLoad}
+            style={{ width: '100%', marginTop: 6 }}>
+            Load Simulation
+          </button>
+          {loadStatus && (
+            <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 6 }}>
+              {loadStatus}
             </div>
           )}
         </section>
@@ -771,7 +895,7 @@ export default function App() {
             color={stabilityColor(stability.score)} />
           <div className="stats-fill" />
           <button className="info-btn" onClick={() => setShowInfo(true)}>ⓘ</button>
-          <span className="stats-brand">EcoSim · CSC 583</span>
+          <span className="stats-brand">EcoSim · COMP 583</span>
         </div>
       </div>
 
