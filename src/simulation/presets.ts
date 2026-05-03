@@ -2,15 +2,14 @@
  * src/simulation/presets.ts
  *
  * ES-75 — Preset Environments: Savanna, Rainforest, Island, Tundra
- *
- * Each preset bundles:
- *   - TerrainOptions  (noiseScale, maxHeight) → passed to createTerrain()
- *   - SimParams patch  (food, energy, speed, mutation) → merged into engine.params
- *   - Visual hint     (sky/fog color) → applied to Three.js scene
+ * ES-39 — Sim Behavior Presets: Balanced, Attack Mode, Evolutionary Pressure,
+ *          Low Food, Peaceful, Speedrun
  */
 
 import type { SimParams } from './agentState'
 import type { TerrainOptions } from '../rendering/terrain'
+
+// ── Environment presets (terrain + sky + sim params) ─────────────────
 
 export interface EnvironmentPreset {
   id:          string
@@ -18,8 +17,8 @@ export interface EnvironmentPreset {
   description: string
   terrain:     TerrainOptions
   params:      Partial<SimParams>
-  skyColor:    number   // hex
-  fogColor:    number   // hex
+  skyColor:    number
+  fogColor:    number
   fogNear:     number
   fogFar:      number
 }
@@ -32,15 +31,15 @@ export const PRESETS: EnvironmentPreset[] = [
     terrain: {
       size:        256,
       segments:    128,
-      maxHeight:   8,      // nearly flat
-      noiseScale:  0.004,  // broad, gentle features
+      maxHeight:   8,
+      noiseScale:  0.004,
       colorScheme: 'savanna',
     },
     params: {
-      foodEnergyGain:   12.0,   // scarce food
-      moveEnergyCost:   0.15,   // hot = costly
-      moveSpeed:        2.0,    // fast movers survive
-      foodDetectRadius: 18.0,   // must range wide
+      foodEnergyGain:   12.0,
+      moveEnergyCost:   0.15,
+      moveSpeed:        2.0,
+      foodDetectRadius: 18.0,
       mutationRate:     0.06,
       mutationStrength: 0.25,
     },
@@ -56,15 +55,15 @@ export const PRESETS: EnvironmentPreset[] = [
     terrain: {
       size:        256,
       segments:    128,
-      maxHeight:   45,     // steep ridges
-      noiseScale:  0.012,  // tight, varied
+      maxHeight:   45,
+      noiseScale:  0.012,
       colorScheme: 'rainforest',
     },
     params: {
-      foodEnergyGain:   32.0,   // abundant
-      moveEnergyCost:   0.08,   // cool and humid
-      moveSpeed:        1.0,    // dense undergrowth
-      foodDetectRadius: 7.0,    // short visibility
+      foodEnergyGain:   32.0,
+      moveEnergyCost:   0.08,
+      moveSpeed:        1.0,
+      foodDetectRadius: 7.0,
       mutationRate:     0.04,
       mutationStrength: 0.15,
     },
@@ -81,7 +80,7 @@ export const PRESETS: EnvironmentPreset[] = [
       size:        256,
       segments:    128,
       maxHeight:   35,
-      noiseScale:  0.014,  // sharp central peak, water edges
+      noiseScale:  0.014,
       colorScheme: 'island',
     },
     params: {
@@ -89,7 +88,7 @@ export const PRESETS: EnvironmentPreset[] = [
       moveEnergyCost:   0.1,
       moveSpeed:        1.5,
       foodDetectRadius: 12.0,
-      mutationRate:     0.08,   // isolated = faster drift
+      mutationRate:     0.08,
       mutationStrength: 0.3,
     },
     skyColor: 0x87ceeb,
@@ -105,14 +104,14 @@ export const PRESETS: EnvironmentPreset[] = [
       size:        256,
       segments:    128,
       maxHeight:   2,
-      noiseScale:  0.003,  // very flat, windswept
+      noiseScale:  0.003,
       colorScheme: 'tundra',
     },
     params: {
-      foodEnergyGain:   8.0,    // near-barren
-      moveEnergyCost:   0.22,   // freezing
+      foodEnergyGain:   8.0,
+      moveEnergyCost:   0.22,
       moveSpeed:        1.2,
-      foodDetectRadius: 22.0,   // must range far
+      foodDetectRadius: 22.0,
       mutationRate:     0.05,
       mutationStrength: 0.2,
     },
@@ -126,5 +125,108 @@ export const PRESETS: EnvironmentPreset[] = [
 export const DEFAULT_PRESET_ID = 'island'
 
 export function getPreset(id: string): EnvironmentPreset {
-  return PRESETS.find(p => p.id === id) ?? PRESETS[2] // fallback: island
+  return PRESETS.find(p => p.id === id) ?? PRESETS[2]
+}
+
+// ── ES-39: Sim behavior presets ───────────────────────────────────────
+// These control agent behavior + sim speed only — no terrain or sky swap.
+// Applied on top of whatever environment preset is active.
+
+export interface SimPreset {
+  id:          string
+  label:       string
+  description: string
+  simSpeed:    number
+  params:      Partial<SimParams>
+}
+
+export const SIM_PRESETS: SimPreset[] = [
+  {
+    id:          'balanced',
+    label:       'Balanced',
+    description: 'Default parameters. Stable prey/predator coexistence.',
+    simSpeed: 1.0,
+    params: {
+      mutationRate:     0.05,
+      mutationStrength: 0.2,
+      moveSpeed:        1.5,
+      foodEnergyGain:   20.0,
+      moveEnergyCost:   0.1,
+      foodDetectRadius: 10.0,
+    },
+  },
+  {
+    id:          'attack',
+    label:       'Attack Mode',
+    description: 'Predators hit harder and move fast — prey must evolve quickly or die.',
+    simSpeed: 2.0,
+    params: {
+      mutationRate:     0.05,
+      mutationStrength: 0.2,
+      moveSpeed:        2.5,
+      foodEnergyGain:   8.0,
+      moveEnergyCost:   0.1,
+      foodDetectRadius: 14.0,
+    },
+  },
+  {
+    id:          'evolution',
+    label:       'Evo Pressure',
+    description: 'High mutation — rapid neural network drift and adaptation.',
+    simSpeed: 1.5,
+    params: {
+      mutationRate:     0.45,
+      mutationStrength: 0.9,
+      moveSpeed:        1.5,
+      foodEnergyGain:   20.0,
+      moveEnergyCost:   0.1,
+      foodDetectRadius: 10.0,
+    },
+  },
+  {
+    id:          'lowfood',
+    label:       'Low Food',
+    description: 'Food is scarce and energy-poor. Efficiency wins.',
+    simSpeed: 1.0,
+    params: {
+      mutationRate:     0.05,
+      mutationStrength: 0.2,
+      moveSpeed:        1.5,
+      foodEnergyGain:   6.0,
+      moveEnergyCost:   0.15,
+      foodDetectRadius: 4.0,
+    },
+  },
+  {
+    id:          'peaceful',
+    label:       'Peaceful',
+    description: 'No predators at start. Pure prey evolution with abundant food.',
+    simSpeed: 1.0,
+    params: {
+      mutationRate:     0.05,
+      mutationStrength: 0.2,
+      moveSpeed:        1.5,
+      foodEnergyGain:   35.0,
+      moveEnergyCost:   0.05,
+      foodDetectRadius: 10.0,
+    },
+  },
+  {
+    id:          'speedrun',
+    label:       'Speedrun',
+    description: 'Maximum simulation speed. Watch thousands of generations fly by.',
+    simSpeed: 4.0,
+    params: {
+      mutationRate:     0.3,
+      mutationStrength: 0.5,
+      moveSpeed:        1.5,
+      foodEnergyGain:   20.0,
+      moveEnergyCost:   0.1,
+      foodDetectRadius: 10.0,
+    },
+  },
+]
+
+export function getSimPreset(id: string): SimPreset {
+  return SIM_PRESETS.find(p => p.id === id) ?? SIM_PRESETS[0]
 }

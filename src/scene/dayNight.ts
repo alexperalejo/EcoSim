@@ -6,6 +6,10 @@
  * Animates the sun position, light colours, and sky/fog colour
  * to simulate a day/night cycle. Called each frame from SceneManager.
  *
+ * The caller passes `elapsedSimSeconds` — simulation time, scaled by simSpeed
+ * and frozen while paused. This must be the SAME value used by the HUD clock
+ * (App.tsx → calcDayTime) so the visuals and the displayed time stay in sync.
+ *
  * Cycle phases (by normalised time 0→1):
  *   0.0  – midnight  (dark navy sky, no sun)
  *   0.25 – sunrise   (orange horizon)
@@ -17,16 +21,17 @@
 import * as THREE from 'three'
 
 // ── Tuneable constants ────────────────────────────────────────────────
-const DAY_DURATION = 240.0  // seconds for one full day/night cycle
+// Must match DAY_DURATION_SECONDS in App.tsx exactly.
+export const DAY_DURATION = 240.0  // seconds for one full day/night cycle
 
 // Key sky colours at each phase
 const SKY_NIGHT   = new THREE.Color(0x0d1b2a)  // deep navy blue
 const SKY_SUNRISE = new THREE.Color(0xfdb97d)  // soft peach
-const SKY_DAY     = new THREE.Color(0x87ceeb)  // sky blue (unchanged)
+const SKY_DAY     = new THREE.Color(0x87ceeb)  // sky blue
 const SKY_SUNSET  = new THREE.Color(0xf4845f)  // soft coral/salmon
 
 // Sun light colours
-const SUN_DAY     = new THREE.Color(0xfff4e0)  // warm white (unchanged)
+const SUN_DAY     = new THREE.Color(0xfff4e0)  // warm white
 const SUN_SUNRISE = new THREE.Color(0xffd4a3)  // warm peach
 const SUN_SUNSET  = new THREE.Color(0xffb347)  // soft amber
 const SUN_NIGHT   = new THREE.Color(0x1a2744)  // dark blue
@@ -61,14 +66,24 @@ function cyclicColorLerp(
 
 // ── Main update function ──────────────────────────────────────────────
 
+/**
+ * @param elapsedSimSeconds Simulation seconds since reset. MUST be scaled by
+ *   simSpeed and frozen while paused — i.e. the same value driving the HUD.
+ *   This is what keeps the lighting and the displayed clock in sync.
+ *
+ * Convention: t = 0  → midnight (calcDayTime(0) → "12:00 AM").
+ *             t = 0.5 → noon (sun directly overhead).
+ *             Aligns 1:1 with App.tsx's calcDayTime() so visuals always
+ *             match the displayed clock, regardless of simSpeed or pauses.
+ */
 export function updateDayNight(
-  elapsed: number,
+  elapsedSimSeconds: number,
   sun: THREE.DirectionalLight,
   ambient: THREE.AmbientLight,
   scene: THREE.Scene,
 ): void {
   // Normalised time: 0 = midnight, 0.5 = noon, 1 = midnight again
-  const t = (elapsed % DAY_DURATION) / DAY_DURATION
+  const t = (elapsedSimSeconds % DAY_DURATION) / DAY_DURATION
 
   // ── Sun position ────────────────────────────────────────────────
   // Orbit in the XY plane (rises east = +X, sets west = -X)
