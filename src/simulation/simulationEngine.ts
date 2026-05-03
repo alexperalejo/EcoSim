@@ -117,6 +117,7 @@ export interface SimulationEngine {
   getAgentData:            (slot: number) => AgentData | null
   updateScreenPositions:   (camera: THREE.Camera, viewW: number, viewH: number) => void
   pickAgent:               (clickPxX: number, clickPxY: number) => number
+  getWorldPositions:       () => Float32Array
   getNextFreeSlot:         () => number
   dispose:                 () => void
   params:                  SimParams
@@ -442,6 +443,8 @@ export function createSimulationEngine(initialCount: number = INITIAL_AGENT_COUN
 
     getNextFreeSlot() { return slotManager.allocate() },
 
+    getWorldPositions() { return worldPositions },
+
     getAgentData(slot: number): AgentData | null {
       if (slot < 0 || slot >= MAX_AGENTS) return null
       const bIdx  = slot * 4
@@ -555,6 +558,10 @@ export function getAgentStats() {
 
 export function getAgentData(slot: number) {
   return engine?.getAgentData(slot) ?? null
+}
+
+export function getWorldPositions(): Float32Array {
+  return engine?.getWorldPositions() ?? new Float32Array(0)
 }
 
 export function updateScreenPositions(camera: THREE.Camera, viewW: number, viewH: number) {

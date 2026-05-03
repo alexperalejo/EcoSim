@@ -743,3 +743,145 @@ html, body, #root {
 .disease-row span:first-child {
   color: var(--text-muted);
 }
+
+/* ── ES-39: 3-column sim preset grid ────────────────────────────── */
+.preset-grid-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+/* ── ES-38: Heatmap toggle button ───────────────────────────────── */
+.btn-heatmap {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  text-align: center;
+}
+
+.btn-heatmap:hover {
+  background: var(--surface3, #2a2a3a);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.btn-heatmap-active {
+  background: #3a1a00;
+  color: #ff8800;
+  border-color: #ff8800;
+}
+
+/* ── ES-38: Minimap frame overlay ───────────────────────────────── */
+.minimap-frame {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 180px;
+  height: 180px;
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.04);
+}
+
+.minimap-frame::before {
+  content: 'MAP';
+  position: absolute;
+  top: -18px;
+  left: 0;
+  font-size: 8px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.minimap-frame-heat {
+  border-color: #ff8800;
+}
+
+.minimap-frame-compass {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 8px;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  line-height: 1;
+}
+
+/* ── Density legend ──────────────────────────────────────────────── */
+.density-legend {
+  margin-top: 8px;
+}
+
+.density-legend-bar {
+  height: 8px;
+  border-radius: 3px;
+  background: linear-gradient(to right, #0000aa, #00ffff, #00ff00, #ffff00, #ff0000);
+  width: 100%;
+}
+
+.density-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--muted);
+  margin-top: 3px;
+  letter-spacing: 0.05em;
+}
+
+/* ── Density toggle in stats bar ─────────────────────────────────── */
+.btn-density-hud {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.btn-density-hud:hover {
+  color: var(--text);
+  border-color: var(--accent2);
+}
+
+.btn-density-hud-active {
+  background: #1a1000;
+  color: #ff8800;
+  border-color: #ff8800;
+}
+
+.density-legend-inline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+}
+
+.density-legend-bar-inline {
+  width: 60px;
+  height: 6px;
+  border-radius: 2px;
+  background: linear-gradient(to right, #0000aa, #00ffff, #00ff00, #ffff00, #ff0000);
+  flex-shrink: 0;
+}
+
+.density-legend-lo,
+.density-legend-hi {
+  font-size: 8px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}

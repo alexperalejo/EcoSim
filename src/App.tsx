@@ -5,6 +5,8 @@
  * ES-74: Stability score display
  * ES-89: Plain-language stability alerts
  * ES-32: Stability trend graph
+ * ES-38: Heatmap overlay toggle
+ * ES-39: Sim behavior presets
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react'
@@ -13,7 +15,8 @@ import {
   ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts'
 import { SceneManager } from './scene/SceneManager'
-import { PRESETS, getPreset, DEFAULT_PRESET_ID } from './simulation/presets'
+import { PRESETS, getPreset, DEFAULT_PRESET_ID, SIM_PRESETS } from './simulation/presets'
+import type { SimPreset } from './simulation/presets'
 import { diseaseSimulation, DEFAULT_DISEASE_PARAMS } from './simulation/diseaseSimulation'
 import type { DiseaseState, DiseaseParams } from './simulation/diseaseSimulation'
 import { getAgentStats, getAgentData, checkImbalance, STABILITY_THRESHOLD_CRITICAL, STABILITY_THRESHOLD_WARNING } from './simulation'
@@ -55,7 +58,7 @@ interface PopSnapshot {
   prey:     number
   predator: number
   alive:    number
-  stability: number  // ES-32: stability score at this moment
+  stability: number
 }
 
 const DEFAULT_CONTROLS: SimControls = {
@@ -117,7 +120,6 @@ function StatBadge({ label, value, color }: { label: string; value: string | num
 
 // ── Time helper ───────────────────────────────────────────────────────
 
-
 function calcDayTime(elapsedSeconds: number): { dayCount: number; timeOfDay: string } {
   const dayCount  = Math.floor(elapsedSeconds / DAY_DURATION_SECONDS) + 1
   const timeInDay = (elapsedSeconds % DAY_DURATION_SECONDS) / DAY_DURATION_SECONDS
@@ -130,7 +132,7 @@ function calcDayTime(elapsedSeconds: number): { dayCount: number; timeOfDay: str
   return { dayCount, timeOfDay }
 }
 
-// ── Custom Recharts tooltip ───────────────────────────────────────────
+// ── Custom Recharts tooltips ──────────────────────────────────────────
 
 function PopTooltip({ active, payload, label }: { active?: boolean; payload?: {color:string;name:string;value:number}[]; label?: number }) {
   if (!active || !payload?.length) return null
@@ -164,23 +166,21 @@ function StabilityTooltip({ active, payload, label }: { active?: boolean; payloa
 // ── Stability helpers ─────────────────────────────────────────────────
 
 function stabilityColor(score: number): string {
-  if (score >= 0.75) return '#00e5a0'   // accent green
-  if (score >= 0.50) return '#ffcc00'   // yellow
-  if (score >= 0.25) return '#ff8800'   // orange
-  return '#ff4444'                       // red
+  if (score >= 0.75) return '#00e5a0'
+  if (score >= 0.50) return '#ffcc00'
+  if (score >= 0.25) return '#ff8800'
+  return '#ff4444'
 }
 
 function StabilityGauge({ result }: { result: StabilityResult }) {
   const pct   = Math.round(result.score * 100)
   const color = stabilityColor(result.score)
-  const circumference = 2 * Math.PI * 28  // r=28
+  const circumference = 2 * Math.PI * 28
 
   return (
     <div className="stability-gauge">
       <svg width="72" height="72" viewBox="0 0 72 72">
-        {/* Track */}
         <circle cx="36" cy="36" r="28" fill="none" stroke="var(--border2)" strokeWidth="5" />
-        {/* Fill */}
         <circle
           cx="36" cy="36" r="28" fill="none"
           stroke={color} strokeWidth="5"
@@ -312,13 +312,12 @@ export default function App() {
   const fpsCountRef = useRef(0)
   const fpsTimerRef = useRef(0)
   const popTimerRef = useRef(0)
-  const simSpeedRef = useRef(DEFAULT_CONTROLS.simSpeed)
-  const elapsedSimSecondsRef = useRef(0)
-  const lastTimestampRef = useRef(0)
 
   const [running, setRunning] = useState(true)
   const [controls, setControls] = useState<SimControls>(DEFAULT_CONTROLS)
   const [activePreset, setActivePreset] = useState<string>(DEFAULT_PRESET_ID)
+  const [activeSimPreset, setActiveSimPreset] = useState<string>('balanced')
+  const [heatmapOn, setHeatmapOn] = useState(false)
   const [diseaseState, setDiseaseState] = useState<DiseaseState | null>(null)
   const [diseaseParams] = useState<DiseaseParams>(DEFAULT_DISEASE_PARAMS)
   const [showCharts, setShowCharts] = useState(false)
@@ -330,17 +329,15 @@ export default function App() {
   const [loadStatus, setLoadStatus] = useState<string>('')
   const [shareURL, setShareURL] = useState<string>('')
 
-  // T-4.4.1: full-session stability score log (unbounded)
   const stabilityScoreLog = useRef<{ tick: number; score: number }[]>([])
-  // ES-34: latest imbalance event
   const [imbalance, setImbalance] = useState<ImbalanceEvent | null>(null)
-  const [stability,  setStability]  = useState<StabilityResult>({
+  const [stability, setStability] = useState<StabilityResult>({
     score: 0.5, label: 'Stable', alert: '', alertLevel: 'none',
   })
   const [stats, setStats] = useState<SimStats>({
     alive: 0, prey: 0, predator: 0, free: 0,
     avgEnergy: 0, avgAge: 0, fps: 0, frame: 0, generation: 0,
-    dayCount: 1, timeOfDay: '12:00 PM',
+    dayCount: 1, timeOfDay: '12:00 AM',
   })
 
   // Mount 3D scene
@@ -348,10 +345,9 @@ export default function App() {
     if (!mountRef.current) return
     const manager = new SceneManager(mountRef.current)
     managerRef.current = manager
-    manager.onAgentClick = (slot) => setSelectedSlot(slot)
+    manager.onAgentClick = (slot: number) => setSelectedSlot(slot)
     manager.start()
 
-    // ES-72: Auto-load shared simulation from URL
     const sharedId = getSimIDFromURL()
     if (sharedId) {
       loadSimulation(sharedId).then(snapshot => {
@@ -366,7 +362,7 @@ export default function App() {
     return () => { manager.dispose(); managerRef.current = null }
   }, [])
 
-  // Stats polling + population + stability sampling
+  // Stats polling
   useEffect(() => {
     let animId: number
 
@@ -375,12 +371,6 @@ export default function App() {
       frameRef.current++
       fpsCountRef.current++
 
-        if (lastTimestampRef.current > 0) {
-          const delta = (now - lastTimestampRef.current) / 1000
-          elapsedSimSecondsRef.current += delta * simSpeedRef.current
-        }
-        lastTimestampRef.current = now
-
       if (now - fpsTimerRef.current >= 1000) {
         const elapsed = now - fpsTimerRef.current
         const fps     = Math.round(fpsCountRef.current * 1000 / elapsed)
@@ -388,7 +378,8 @@ export default function App() {
         fpsTimerRef.current = now
 
         const s = getAgentStats()
-        const { dayCount, timeOfDay } = calcDayTime(elapsedSimSecondsRef.current)
+        const simSeconds = managerRef.current?.elapsedSimSeconds ?? 0
+        const { dayCount, timeOfDay } = calcDayTime(simSeconds)
 
         setStats(prev => ({
           ...prev,
@@ -408,18 +399,14 @@ export default function App() {
           popTimerRef.current = now
 
           setPopHistory(prev => {
-            // ES-74/32: compute stability from history so far
             const result = computeStability(s.prey, s.predator, s.avgEnergy, prev)
             setStability(result)
 
-            // T-4.4.1: append to full-session score log
             stabilityScoreLog.current.push({ tick: dayCount, score: result.score })
 
-            // ES-34 T-4.6.1/T-4.6.2: check for population imbalance every N ticks
             const evt = checkImbalance(s.prey, s.predator, dayCount)
             if (evt) setImbalance(evt)
 
-            // ES-84: advance disease simulation
             if (diseaseSimulation.isActive) {
               const ds = diseaseSimulation.update(s.alive)
               setDiseaseState({ ...ds })
@@ -455,26 +442,24 @@ export default function App() {
     if (!managerRef.current || !mountRef.current) return
     managerRef.current.dispose()
     const m = new SceneManager(mountRef.current)
-    elapsedSimSecondsRef.current = 0  // ← added***********
-    lastTimestampRef.current     = 0  // ← added***********
     managerRef.current = m
-    m.onAgentClick = (slot) => setSelectedSlot(slot)
+    m.onAgentClick = (slot: number) => setSelectedSlot(slot)
     m.start()
     setRunning(true)
     frameRef.current = 0
     setPopHistory([])
     setSelectedSlot(null)
-    setStats(prev => ({ ...prev, frame: 0, generation: 0, dayCount: 1, timeOfDay: '12:00 PM' }))
+    setHeatmapOn(false)
+    setStats(prev => ({ ...prev, frame: 0, generation: 0, dayCount: 1, timeOfDay: '12:00 AM' }))
   }, [])
 
-  // ES-75: Apply environment preset
+  // ES-75: Environment preset
   const handlePreset = useCallback((id: string) => {
     const preset = getPreset(id)
     setActivePreset(id)
     if (managerRef.current) {
       managerRef.current.applyPreset(preset)
     }
-    // Sync sliders to preset params
     setControls(prev => ({
       ...prev,
       moveSpeed:        preset.params.moveSpeed        ?? prev.moveSpeed,
@@ -486,22 +471,54 @@ export default function App() {
     }))
   }, [])
 
+  // ES-39: Sim behavior preset
+  const handleSimPreset = useCallback((preset: SimPreset) => {
+    setActiveSimPreset(preset.id)
+    const m = managerRef.current
+    if (!m) return
+
+    // Apply sim speed
+    m.simSpeed = preset.simSpeed
+    setControls(prev => ({ ...prev, simSpeed: preset.simSpeed }))
+
+    // Apply params
+    if (m.params) {
+      Object.assign(m.params, preset.params)
+    }
+    setControls(prev => ({
+      ...prev,
+      mutationRate:     preset.params.mutationRate     ?? prev.mutationRate,
+      mutationStrength: preset.params.mutationStrength ?? prev.mutationStrength,
+      moveSpeed:        preset.params.moveSpeed        ?? prev.moveSpeed,
+      foodEnergyGain:   preset.params.foodEnergyGain   ?? prev.foodEnergyGain,
+      moveEnergyCost:   preset.params.moveEnergyCost   ?? prev.moveEnergyCost,
+      foodDetectRadius: preset.params.foodDetectRadius ?? prev.foodDetectRadius,
+    }))
+  }, [])
+
+  // ES-38: Heatmap toggle
+  const handleHeatmapToggle = useCallback(() => {
+    const m = managerRef.current
+    if (!m) return
+    m.toggleHeatmap()
+    setHeatmapOn(m.heatmapVisible)
+  }, [])
+
   // Slider → engine params
   const updateControl = useCallback((key: keyof SimControls, value: number) => {
-    if (key === 'simSpeed') simSpeedRef.current = value // keep ref in sync for time calculations
-      setControls(prev => {
-        const next    = { ...prev, [key]: value }
-        const manager = managerRef.current
-        if (!manager) return next
+    setControls(prev => {
+      const next    = { ...prev, [key]: value }
+      const manager = managerRef.current
+      if (!manager) return next
 
-        if (key === 'simSpeed') {
-          manager.simSpeed = value
-        } else if (manager.params) {
-          (manager.params as Record<string, number>)[key] = value
-        }
-        return next
-      })
-    }, [])
+      if (key === 'simSpeed') {
+        manager.simSpeed = value
+      } else if (manager.params) {
+        (manager.params as Record<string, number>)[key] = value
+      }
+      return next
+    })
+  }, [])
 
   // ES-84: Disease controls
   const handleDiseaseStart = useCallback(() => {
@@ -557,13 +574,13 @@ export default function App() {
     }
   }, [loadId, updateControl])
 
-  // ES-72: Copy share URL
   const handleCopyURL = useCallback(() => {
     if (!shareURL) return
     navigator.clipboard.writeText(shareURL)
     setSaveStatus('URL copied!')
     setTimeout(() => setSaveStatus(''), 2000)
   }, [shareURL])
+
   const alertColor = stability.alertLevel === 'critical' ? 'var(--red)'
                    : stability.alertLevel === 'warn'     ? 'var(--yellow)'
                    : 'transparent'
@@ -585,10 +602,10 @@ export default function App() {
               className={`btn-primary ${running ? 'btn-pause' : 'btn-play'}`}
               onClick={handlePauseResume}
             >
-              {running ? '⏸  Pause' : '▶  Resume'}
+              {running ? 'Pause' : 'Resume'}
             </button>
             <button className="btn-secondary" onClick={handleReset}>
-              ↺  Reset
+              Reset
             </button>
           </div>
           <div className={`status-pill ${running ? 'pill-running' : 'pill-paused'}`}>
@@ -658,6 +675,7 @@ export default function App() {
             onChange={v => updateControl('foodDetectRadius', v)} />
         </section>
 
+        {/* ES-75: Environment presets */}
         <section className="sidebar-section">
           <div className="section-label">ENVIRONMENT</div>
           <div className="preset-grid">
@@ -674,15 +692,32 @@ export default function App() {
           </div>
         </section>
 
+        {/* ES-39: Sim behavior presets */}
+        <section className="sidebar-section">
+          <div className="section-label">SCENARIO</div>
+          <div className="preset-grid preset-grid-3">
+            {SIM_PRESETS.map(p => (
+              <button
+                key={p.id}
+                className={`btn-preset ${activeSimPreset === p.id ? 'btn-preset-active' : ''}`}
+                onClick={() => handleSimPreset(p)}
+                title={p.description}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
         <section className="sidebar-section">
           <div className="section-label">DISEASE</div>
           {!diseaseSimulation.isActive ? (
             <button className="btn-secondary" onClick={handleDiseaseStart}>
-              ☣ Seed Disease
+              Seed Disease
             </button>
           ) : (
             <button className="btn-secondary" style={{ color: 'var(--red)' }} onClick={handleDiseaseStop}>
-              ✕ Stop Disease
+              Stop Disease
             </button>
           )}
           {diseaseState && (
@@ -699,26 +734,18 @@ export default function App() {
         {/* ES-71 / ES-72: Save / Load / Share */}
         <section className="sidebar-section">
           <div className="section-label">SAVE / LOAD</div>
-
-          {/* Save button */}
           <button className="btn-secondary" onClick={handleSave}
             style={{ width: '100%', marginBottom: 8 }}>
              Save Simulation
           </button>
-
-          {/* Save status */}
           {saveStatus && (
             <div style={{ fontSize: 10, color: 'var(--accent)', marginBottom: 6 }}>
               {saveStatus}
             </div>
           )}
-
-          {/* Share URL */}
           {shareURL && (
             <div style={{ marginBottom: 8 }}>
-              <div style={{ fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}>
-                SHARE URL
-              </div>
+              <div style={{ fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}>SHARE URL</div>
               <div style={{
                 fontSize: 8, color: 'var(--accent2)', wordBreak: 'break-all',
                 background: 'var(--surface2)', padding: '4px 6px',
@@ -732,11 +759,7 @@ export default function App() {
               </button>
             </div>
           )}
-
-          {/* Load by ID */}
-          <div style={{ fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}>
-            LOAD BY ID
-          </div>
+          <div style={{ fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}>LOAD BY ID</div>
           <input
             type="text"
             placeholder="Paste simulation ID..."
@@ -760,7 +783,7 @@ export default function App() {
             className={`btn-secondary chart-toggle ${showCharts ? 'chart-toggle-active' : ''}`}
             onClick={() => setShowCharts(s => !s)}
           >
-            {showCharts ? '▼ Hide Charts' : '▶ Population Charts'}
+            {showCharts ? 'Hide Charts' : 'Population Charts'}
           </button>
         </section>
 
@@ -769,22 +792,20 @@ export default function App() {
       {/* ── Main area ── */}
       <div className="main-area">
 
-        {/* ES-89: Alert banner */}
         {stability.alertLevel !== 'none' && (
           <div className="alert-banner" style={{ borderColor: alertColor, color: alertColor }}>
-            <span className="alert-icon">{stability.alertLevel === 'critical' ? '⚠' : '●'}</span>
+            <span className="alert-icon">{stability.alertLevel === 'critical' ? '!' : ''}</span>
             <span className="alert-text">{stability.alert}</span>
           </div>
         )}
 
-        {/* ES-34: Population imbalance banner */}
         {imbalance && (
           <div className="alert-banner" style={{
             borderColor: imbalance.alertLevel === 'critical' ? 'var(--red)' : 'var(--yellow)',
             color:       imbalance.alertLevel === 'critical' ? 'var(--red)' : 'var(--yellow)',
             marginTop: stability.alertLevel !== 'none' ? '4px' : undefined,
           }}>
-            <span className="alert-icon">{imbalance.alertLevel === 'critical' ? '⚠' : '◆'}</span>
+            <span className="alert-icon">{imbalance.alertLevel === 'critical' ? '!' : ''}</span>
             <span className="alert-text">{imbalance.label}</span>
           </div>
         )}
@@ -792,8 +813,8 @@ export default function App() {
         <div className="viewport-wrapper">
           <div ref={mountRef} className="viewport" />
 
-          {/* Floating HUD */}
-          <div className="hud">            <div className="hud-item">
+          <div className="hud">
+            <div className="hud-item">
               <span className="hud-label">FPS</span>
               <span className={`hud-value ${stats.fps < 20 ? 'hud-warn' : ''}`}>{stats.fps}</span>
             </div>
@@ -819,18 +840,17 @@ export default function App() {
             </div>
           </div>
 
-          {/* Agent inspector — slides in from top-right when an agent is clicked */}
           {selectedSlot !== null && (
             <AgentInspector slot={selectedSlot} onClose={() => setSelectedSlot(null)} />
           )}
+
+          {/* ES-38: Minimap frame — cosmetic border over the canvas-rendered minimap */}
+          <div className={`minimap-frame ${heatmapOn ? 'minimap-frame-heat' : ''}`} />
         </div>
 
-        {/* ES-37/73/32: Charts panel */}
         {showCharts && (
           <div className="charts-panel">
             <div className="charts-row">
-
-              {/* Population by species */}
               <div className="chart-card">
                 <div className="chart-title">Population by Species</div>
                 <ResponsiveContainer width="100%" height={130}>
@@ -853,7 +873,6 @@ export default function App() {
                 </ResponsiveContainer>
               </div>
 
-              {/* ES-32: Stability trend */}
               <div className="chart-card">
                 <div className="chart-title">Stability Trend</div>
                 <ResponsiveContainer width="100%" height={130}>
@@ -868,7 +887,6 @@ export default function App() {
                       tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
                     />
                     <Tooltip content={<StabilityTooltip />} />
-                    {/* T-4.3.1: reference lines at spec-defined thresholds */}
                     <ReferenceLine y={STABILITY_THRESHOLD_WARNING}  stroke="#ffcc00" strokeDasharray="3 3" strokeOpacity={0.4} label={{ value: 'warn', position: 'right', fontSize: 9, fill: '#ffcc00' }} />
                     <ReferenceLine y={STABILITY_THRESHOLD_CRITICAL} stroke="#ff4444" strokeDasharray="3 3" strokeOpacity={0.4} label={{ value: 'crit', position: 'right', fontSize: 9, fill: '#ff4444' }} />
                     <Line type="monotone" dataKey="stability" name="Stability"
@@ -876,12 +894,10 @@ export default function App() {
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-
             </div>
           </div>
         )}
 
-        {/* Stats bar */}
         <div className="stats-bar">
           <StatBadge label="ALIVE"      value={stats.alive} />
           <div className="stats-sep" />
@@ -893,13 +909,27 @@ export default function App() {
           <div className="stats-sep" />
           <StatBadge label="STABILITY"  value={`${Math.round(stability.score * 100)}%`}
             color={stabilityColor(stability.score)} />
+          <div className="stats-sep" />
+          <button
+            className={`btn-density-hud ${heatmapOn ? 'btn-density-hud-active' : ''}`}
+            onClick={handleHeatmapToggle}
+            title="Toggle agent density map"
+          >
+            Density
+          </button>
+          {heatmapOn && (
+            <div className="density-legend-inline">
+              <div className="density-legend-bar-inline" />
+              <span className="density-legend-lo">Low</span>
+              <span className="density-legend-hi">High</span>
+            </div>
+          )}
           <div className="stats-fill" />
-          <button className="info-btn" onClick={() => setShowInfo(true)}>ⓘ</button>
+          <button className="info-btn" onClick={() => setShowInfo(true)}>i</button>
           <span className="stats-brand">EcoSim · COMP 583</span>
         </div>
       </div>
 
-      {/* Info modal */}
       {showInfo && <InfoModal onClose={() => setShowInfo(false)} />}
 
     </div>
